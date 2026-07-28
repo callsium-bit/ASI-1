@@ -1,4 +1,4 @@
-# ASI Prototip — Sembolik Sağduyu Motoru
+# ASI-1 — Süper Zeka Prototipi
 
 **"Mavi düşmez. Renk algıdır, madde değil."**
 
