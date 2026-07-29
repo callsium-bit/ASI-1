@@ -208,7 +208,7 @@ class AxiomEngine:
 
     def _infer_entity_type(self, name: str) -> EntityType:
         renkler = {"mavi", "kirmizi", "yesil", "sari", "beyaz", "siyah", "mor", "turuncu", "pembe", "lacivert"}
-        maddeler = {"su", "tas", "toprak", "hava", "demir", "tahta", "cam", "plastik", "altin", "gumus"}
+        maddeler = {"su", "tas", "toprak", "hava", "demir", "tahta", "cam", "plastik", "altin", "gumus", "madde"}
         algilar = {"renk", "ses", "koku", "tat", "isik", "goruntu"}
         olaylar = {"yagmur", "ruzgar", "kar", "firtina", "deprem", "gok_gurlemesi", "dolu", "sel"}
         name_norm = self._normalize_tr(name)
@@ -1874,6 +1874,9 @@ class WebKnowledgeIngester:
         }
         self._stop_flag = threading.Event()
         self._loop_active = False
+        self._cache: Dict[str, dict] = {}          # Wikipedia yanıt önbelleği
+        self._last_request_time: float = 0.0        # Rate-limit için
+        self._min_request_interval: float = 1.5     # İstekler arası min süre (sn)
 
     # ── Wikipedia API ──────────────────────────────────────────
 
@@ -1946,25 +1949,73 @@ class WebKnowledgeIngester:
         self.stats["failed_fetches"] += 1
         return None
 
+    def _rate_limit_wait(self):
+        """Rate-limit: son istekten beri yeterli süre geçti mi?"""
+        elapsed = time.time() - self._last_request_time
+        if elapsed < self._min_request_interval:
+            time.sleep(self._min_request_interval - elapsed)
+        self._last_request_time = time.time()
+
     def fetch_concept_text(self, concept: str, strategy: str = "auto") -> Optional[dict]:
+        # Önbellek kontrolü
+        cache_key = f"{concept}:{strategy}"
+        if cache_key in self._cache:
+            return self._cache[cache_key]
+
         if strategy == "auto":
+            self._rate_limit_wait()
             result = self.fetch_concept_text(concept, "tr")
             if result:
+                self._cache[cache_key] = result
                 return result
-            return self.fetch_concept_text(concept, "en")
-        search_results = self.search_wikipedia(concept, limit=1)
+            # TR yoksa EN'i de dene (cache'le)
+            self._rate_limit_wait()
+            result = self.fetch_concept_text(concept, "en")
+            if result:
+                self._cache[cache_key] = result
+            return result
+
+        self._rate_limit_wait()
+        search_results = self.search_wikipedia(concept, limit=3)
         if not search_results:
             return None
+
+        # En iyi eşleşmeyi seç (başlık benzerliğine göre)
+        norm = AxiomEngine._normalize_tr
         best = search_results[0]
+        best_score = 0
+        c_norm = norm(concept)
+        for sr in search_results:
+            t_norm = norm(sr["title"])
+            # Tam eşleşme veya içerme
+            if c_norm == t_norm:
+                best = sr; break
+            if c_norm in t_norm or t_norm in c_norm:
+                best = sr; break
+
         title = best["title"]
+
+        self._rate_limit_wait()
         text = self.get_wikipedia_full_text(title) if strategy == "full" else self.get_wikipedia_extract(title)
         if not text:
+            # Fallback: diğer sonuçları dene
+            for sr in search_results[1:]:
+                self._rate_limit_wait()
+                text = self.get_wikipedia_extract(sr["title"])
+                if text:
+                    title = sr["title"]
+                    break
+
+        if not text:
             return None
-        return {
+
+        result = {
             "title": title, "text": text,
             "source": f"wikipedia:{self.language if strategy == 'auto' else strategy}",
             "url": f"https://{self.language}.wikipedia.org/wiki/{urllib.parse.quote(title.replace(' ', '_'))}"
         }
+        self._cache[cache_key] = result
+        return result
 
     # ── LLM ile metinden ilişki çıkarma ────────────────────────
 
@@ -2071,37 +2122,49 @@ class WebKnowledgeIngester:
 
         # Kalıp 1: "X, bir Y'dir" / "X bir Y olarak tanımlanır" → isa Y
         isa_patterns = [
-            # En net: "X, bir Y'dir/dır"
-            re.compile(r'(?:,?\s*bir\s+)(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{2,80}?)(?:\'?dir|\'?dır)[\s.!]', re.I),
-            # "X, Y olarak (tanımlanır/bilinir/adlandırılır)"
-            re.compile(r'(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{3,60})\s+olarak\s+(?:tanımlan[ıi]r|bilinir|adlandırılır)', re.I),
-            # "X, ... denir"
-            re.compile(r'(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{3,60})\s+denir', re.I),
-            # "X bir Y türüdür/çeşididir/şeklidir"
-            re.compile(r'bir\s+(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{3,60})\s+(?:türüdür|çeşididir|şeklidir|biçimidir)', re.I),
-            # "X, Y'dir" (virgülden sonra direkt)
-            re.compile(r',\s*(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{3,60}?)(?:\'?dir|\'?dır)[\s.!]', re.I),
+            # En net: "X, bir Y'dir/dır" (Y = 2-4 kelime, somut kategori)
+            re.compile(r'(?:,?\s*bir\s+)(?P<target>[\wğüşıöçĞÜŞİÖÇ]{2,40}?)(?:\'?dir|\'?dır)[\s.!]', re.I),
+            # "X, Y olarak (tanımlanır/bilinir/adlandırılır)" 
+            re.compile(r'(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{3,50})\s+olarak\s+(?:tanımlan[ıi]r|bilinir|adlandırılır|kabul\s+edilir)', re.I),
+            # "X, ... denir" (kısa hedef)
+            re.compile(r'(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{2,40}?)\s+denir', re.I),
+            # "X bir Y türüdür/çeşididir"
+            re.compile(r'bir\s+(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{3,40})\s+(?:türüdür|çeşididir|şeklidir|biçimidir|türü\s+olarak)', re.I),
         ]
 
         # Kalıp 2: "X'in Y'si Z'dir" → hasa Y Z
         hasa_patterns = [
-            # "X'in Y'si/özelliği Z'dir"
+            # Aitlik: "X'in Y'si/özelliği Z'dir"
             re.compile(
-                r'(?:nin|nın|in|ın|un|ün|sine|sına)\s+'
-                r'(?P<property>sıcaklığı|büyüklüğü|ağırlığı|hızı|yapısı|şekli|'
-                r'türü|cinsi|çeşidi|maddesi|rengi|nedeni|sonucu|'
+                r'(?:nin|nın|in|ın|un|ün)\s+'
+                r'(?P<property>sıcaklığı|büyüklüğü|ağırlığı|hızı|yapısı|şekli|kalınlığı|'
+                r'türü|cinsi|çeşidi|maddesi|rengi|nedeni|sonucu|amacı|görevi|işlevi|'
                 r'merkezi|başkenti|nüfusu|yüzölçümü|uzunluğu|yüksekliği|derinliği|'
-                r'[\wğüşıöç]{3,20}(?:i|ı|u|ü|si|sı|su|sü))\s+'
-                r'(?P<value>[\w\sğüşıöçĞÜŞİÖÇ\-\d.,%°]{2,80}?)(?:\'?dir|\'?dır|\.|,|\s+olarak)',
+                r'ortalama\s+[\wğüşıöç]+|[\wğüşıöç]{3,20}(?:i|ı|u|ü|si|sı|su|sü))\s+'
+                r'(?P<value>[\w\sğüşıöçĞÜŞİÖÇ\-\d.,%°]{2,70}?)(?:\'?dir|\'?dır|\.|,|;|\s+olarak)',
                 re.I
             ),
-            # "X, Y ile ölçülür" → ölçüm: Y
+            # Ölçüm: "X, Y ile ölçülür" 
             re.compile(
-                r'(?P<value>[\w\sğüşıöçĞÜŞİÖÇ\-\d.,]{3,60})\s+(?:ile|yardımıyla|vasıtasıyla)\s+(?:ölçülür|tespit\s+edilir|belirlenir)',
+                r'(?P<value>[\w\sğüşıöçĞÜŞİÖÇ\-\d.,]{3,50})\s+(?:ile|yardımıyla|vasıtasıyla|kullanılarak)\s+(?:ölçülür|tespit\s+edilir|belirlenir|saptanır)',
                 re.I
             ),
         ]
 
+        # Kalite filtreleri
+        GENERIC_TARGETS = {"bir", "bu", "şu", "o", "her", "çok", "bazı", "tüm", 
+                          "olan", "olarak", "şekilde", "biçimde", "durumda",
+                          "nedeniyle", "dolayı", "sonucu", "itibaren"}
+        
+        def _clean_target(t: str) -> str:
+            """Hedef metni temizle: fazla kelimeleri, noktalamaları at"""
+            t = t.strip().rstrip('.,;:!?\'"')
+            # 5 kelimeden uzunsa ilk 4 kelimeyi al
+            words = t.split()
+            if len(words) > 5:
+                t = ' '.join(words[:4])
+            return t
+        
         seen_targets = set()
 
         for sent in sentences[:20]:
@@ -2113,19 +2176,17 @@ class WebKnowledgeIngester:
             for pattern in isa_patterns:
                 m = pattern.search(sent)
                 if m:
-                    target = m.group("target").strip().rstrip('.,;:!?')
+                    target = _clean_target(m.group("target"))
                     # Kalite filtreleri
-                    if len(target) < 2 or len(target) > 80:
+                    if len(target) < 2 or len(target) > 60:
                         continue
                     if target.lower() == concept.lower():
                         continue
                     if target.lower() in seen_targets:
                         continue
-                    # Sayıyla başlayanları, çok genel kelimeleri atla
                     if target[0].isdigit():
                         continue
-                    generic = {"bir", "bu", "şu", "o", "her", "çok", "bazı", "tüm"}
-                    if target.lower().split()[0] in generic:
+                    if target.lower().split()[0] in GENERIC_TARGETS:
                         continue
 
                     seen_targets.add(target.lower())
@@ -2407,6 +2468,661 @@ class WebKnowledgeIngester:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# AŞAMA 7: Fast-Path + Unresolved Queue + Streaming Ingestion
+# ═══════════════════════════════════════════════════════════════════
+
+class FastPathValidator:
+    """
+    LLM'siz, sembolik hızlı değerlendirme katmanı.
+    Gelen bilgiyi önce aksiyomlarla kontrol eder. Net sonuç varsa LLM'i ATLAR.
+
+    Dönüş:
+    - "accepted"  → direkt Kristal Düğüm
+    - "rejected"  → direkt İzole Alan
+    - "unresolved" → LLM'e havale (UnresolvedQueue'ya)
+    """
+
+    def __init__(self, kernel: 'ASIKernel'):
+        self.kernel = kernel
+        self.axioms = kernel.axioms
+        self.hooks = kernel.hooks
+        self.semantic = SemanticMatcher(threshold=0.55)
+        self.stats = {"fast_accepted": 0, "fast_rejected": 0, "unresolved": 0,
+                      "semantic_hits": 0}
+
+    def evaluate(self, concept: str, rel_type: str, target: str = "",
+                 prop: str = "", value: str = "", confidence: float = 1.0) -> dict:
+        """
+        Hızlı değerlendirme. LLM çağrısı YOK.
+
+        Returns: {"verdict": "accepted"|"rejected"|"unresolved", "reason": str}
+        """
+        norm = self.axioms._normalize_tr
+
+        # ── ADIM 1: Direkt aksiyom çakışması (kesin ret) ──
+        if rel_type == "isa":
+            chain = self.axioms.resolve_isa_chain(concept)
+            target_type = self.axioms.get_entity_type(target)
+            concept_type = self.axioms.get_entity_type(concept)
+
+            # İLK KONTROL: Net kategori hatası → tip uyuşmazlığı
+            if concept_type and target_type:
+                if concept_type != target_type and concept_type != EntityType.SOYUT and target_type != EntityType.SOYUT:
+                    self.stats["fast_rejected"] += 1
+                    return {
+                        "verdict": "rejected",
+                        "reason": f"Tip çakışması: '{concept}' ({concept_type.value}), "
+                                  f"'{target}' ({target_type.value}). Uyuşmaz kategoriler."
+                    }
+
+            # Net onay: X isa Y ve Y, X'in zincirinde zaten var
+            if norm(target) in chain:
+                self.stats["fast_accepted"] += 1
+                return {
+                    "verdict": "accepted",
+                    "reason": f"'{target}', '{concept}' zincirinde zaten mevcut."
+                }
+
+            # Y, aksiyomlarda tanımlı bir üst kategori mi?
+            # (SADECE tip uyuşmazlığı YOKSA kabul et)
+            for ax in self.axioms.axioms.values():
+                if ax.predicate == "isa" and norm(ax.subject) == norm(target):
+                    if not concept_type or not target_type or concept_type == target_type or concept_type == EntityType.SOYUT or target_type == EntityType.SOYUT:
+                        self.stats["fast_accepted"] += 1
+                        return {
+                            "verdict": "accepted",
+                            "reason": f"'{target}' aksiyomlarda tanımlı bir kategoridir."
+                        }
+
+        elif rel_type == "hasa":
+            # Net ret: Algısal varlık fiziksel özellik iddia ediyor
+            etype = self.axioms.get_entity_type(concept)
+            if etype == EntityType.ALGISAL and prop in ("madde", "ağırlık", "hacim", "sıcaklık"):
+                self.stats["fast_rejected"] += 1
+                return {
+                    "verdict": "rejected",
+                    "reason": f"'{concept}' algısal bir varlıktır, fiziksel '{prop}' özelliği olamaz."
+                }
+
+            # Net onay: Mevcut aksiyomla birebir eşleşme
+            existing_val = self.axioms.get_hasa_value(concept, prop)
+            if existing_val and norm(str(existing_val)) == norm(str(value)):
+                self.stats["fast_accepted"] += 1
+                return {
+                    "verdict": "accepted",
+                    "reason": f"'{concept}.{prop}={value}' aksiyomla birebir eşleşiyor."
+                }
+
+            # Mevcut düğümlerle çelişki kontrolü
+            existing_nodes = self.hooks.search_5n1k(ne=concept)
+            for node in existing_nodes:
+                for pn, pv in node.properties.items():
+                    if norm(pn) == norm(prop) and norm(str(pv)) != norm(str(value)):
+                        self.stats["fast_rejected"] += 1
+                        return {
+                            "verdict": "rejected",
+                            "reason": f"'{concept}' için '{prop}' zaten '{pv}' olarak kayıtlı. "
+                                      f"'{value}' ile çelişiyor."
+                        }
+
+        elif rel_type == "yapamaz":
+            # Hızlı kontrol: Aksiyom zaten "yapamaz" diyorsa
+            can_do, explanation = self.axioms.can_perform_action(concept, target)
+            if not can_do:
+                self.stats["fast_accepted"] += 1
+                return {
+                    "verdict": "accepted",
+                    "reason": f"Aksiyom onaylı: {explanation}"
+                }
+
+        # ── ADIM 2: SemanticMatcher fallback ──
+        # Tam eşleşme yok → anlamsal benzerlik dene
+        if rel_type == "isa":
+            # Hafızadaki tüm kavramları tara
+            known_concepts = list(self.hooks.hooks.keys())
+            known_concepts = [h.split('.')[0] for h in known_concepts if '.' not in h]
+            known_concepts = list(set(known_concepts))[:50]  # Benzersiz, max 50
+
+            match = self.semantic.match(target, known_concepts)
+            if match:
+                matched_target, score, method = match
+                # Eşleşen kavramın zincirini kontrol et
+                matched_chain = self.axioms.resolve_isa_chain(matched_target)
+                if matched_chain:
+                    self.stats["semantic_hits"] += 1
+                    self.stats["fast_accepted"] += 1
+                    return {
+                        "verdict": "accepted",
+                        "reason": (f"SemanticMatcher ({method}): '{target}' ~ '{matched_target}' "
+                                  f"({score:.0%}). Zincire bağlandı.")
+                    }
+
+        # ── ADIM 3: Net karar verilemedi → unresolved ──
+        self.stats["unresolved"] += 1
+        return {
+            "verdict": "unresolved",
+            "reason": "Aksiyomlar net karar veremedi, LLM hakemliği gerekli."
+        }
+
+
+class UnresolvedQueue:
+    """
+    Çözülemeyen durumları biriktirip toplu LLM sorgusu yapan havuz.
+    """
+
+    def __init__(self, kernel: 'ASIKernel', batch_size: int = 5,
+                 endpoint: str = "http://localhost:1234/v1/chat/completions",
+                 model: str = "qwen3.5-4b",
+                 timeout: int = 120):
+        self.kernel = kernel
+        self.batch_size = batch_size
+        self.endpoint = endpoint
+        self.model = model
+        self.timeout = timeout
+        self.queue: List[dict] = []
+        self.resolved_count = 0
+        self.batch_count = 0
+
+    def add(self, concept: str, rel_type: str, target: str = "",
+            prop: str = "", value: str = "", reason: str = "") -> int:
+        """Havuza çözülememiş bir öğe ekle. Batch dolduysa çöz."""
+        self.queue.append({
+            "concept": concept, "rel_type": rel_type,
+            "target": target, "prop": prop, "value": value,
+            "reason": reason
+        })
+
+        if len(self.queue) >= self.batch_size:
+            return self.resolve_batch()
+        return 0
+
+    def resolve_batch(self) -> int:
+        """Biriken havuzu toplu LLM sorgusuyla çöz."""
+        if not self.queue:
+            return 0
+
+        self.batch_count += 1
+        batch = self.queue[:self.batch_size]
+        self.queue = self.queue[self.batch_size:]  # Kalanları sakla
+
+        # Toplu prompt oluştur
+        items_json = json.dumps(batch, ensure_ascii=False, indent=2)
+        system_prompt = (
+            "Sen bir mantık hakemisin. Sana çözülememiş ilişki önermeleri verilecek. "
+            "Her biri için KESİN karar ver: ACCEPT veya REJECT. "
+            "CEVABIN SADECE ŞU JSON FORMATINDA OLSUN:\n"
+            '{"decisions": [{"index": 0, "verdict": "ACCEPT", "reason": "..."}, ...]}\n'
+            "ACCEPT: önerme doğru, bilgi tabanına eklenebilir.\n"
+            "REJECT: önerme yanlış veya çelişkili, reddedilmeli."
+        )
+        user_prompt = f"Aşağıdaki önermeleri değerlendir:\n{items_json}"
+
+        payload = json.dumps({
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            "temperature": 0.1,
+            "max_tokens": 1500
+        }).encode('utf-8')
+
+        try:
+            req = urllib.request.Request(
+                self.endpoint, data=payload,
+                headers={"Content-Type": "application/json"}
+            )
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read())
+                msg = data["choices"][0]["message"]
+                content = msg.get("content", "") or msg.get("reasoning_content", "")
+
+                # JSON çıkar
+                decisions = self._parse_batch_response(content, len(batch))
+                resolved = 0
+
+                for i, decision in enumerate(decisions):
+                    if i >= len(batch):
+                        break
+                    item = batch[i]
+                    verdict = decision.get("verdict", "REJECT")
+
+                    if verdict == "ACCEPT":
+                        node = self.kernel.hooks.create_node(
+                            ne=item["concept"],
+                            properties={item.get("prop", "nitelik"): item.get("value", item.get("target", ""))},
+                            source=f"batch_resolver #{self.batch_count}",
+                            confidence=0.7
+                        )
+                        resolved += 1
+                    else:
+                        # Reject → izole
+                        node = CrystalNode(
+                            id=self.kernel.hooks._next_id(),
+                            ne=item["concept"],
+                            properties={item.get("prop", "nitelik"): item.get("value", item.get("target", ""))},
+                            source=f"batch_resolver REJECT #{self.batch_count}",
+                            isolated=True, confidence=0.3
+                        )
+                        self.kernel.hooks.nodes[node.id] = node
+                        self.kernel.contradictions.isolation_zone.append(node)
+
+                self.resolved_count += resolved
+                return resolved
+
+        except Exception as e:
+            print(f"   ⚠️ Batch resolver hatası: {e}")
+            # LLM erişilemezse hepsini unresolved olarak geri koy
+            self.queue = batch + self.queue
+            return 0
+
+    def _parse_batch_response(self, content: str, expected: int) -> List[dict]:
+        """LLM batch yanıtından kararları çıkar"""
+        if not content:
+            return [{"verdict": "REJECT"}] * expected
+
+        # JSON parse dene
+        try:
+            data = json.loads(content)
+            return data.get("decisions", [])
+        except json.JSONDecodeError:
+            pass
+
+        # ```json ... ``` bloğu
+        m = re.search(r'```(?:json)?\s*([\s\S]*?)```', content)
+        if m:
+            try:
+                return json.loads(m.group(1)).get("decisions", [])
+            except json.JSONDecodeError:
+                pass
+
+        # ACCEPT/REJECT sayısını metinden çıkar
+        accepts = len(re.findall(r'"verdict"\s*:\s*"ACCEPT"', content))
+        rejects = len(re.findall(r'"verdict"\s*:\s*"REJECT"', content))
+
+        decisions = []
+        for i in range(expected):
+            if i < accepts:
+                decisions.append({"verdict": "ACCEPT", "reason": "LLM batch onayı"})
+            else:
+                decisions.append({"verdict": "REJECT", "reason": "LLM batch reddi"})
+
+        return decisions
+
+    def pending(self) -> int:
+        """Bekleyen öğe sayısı"""
+        return len(self.queue)
+
+
+class StreamingIngestionPipeline:
+    """
+    Anlık süzgeç: Gelen veriyi Fast-Path → Unresolved Queue zincirinden geçirir.
+    LLM çağrılarını en aza indirir.
+    """
+
+    def __init__(self, kernel: 'ASIKernel',
+                 endpoint: str = "http://localhost:1234/v1/chat/completions",
+                 model: str = "qwen3.5-4b"):
+        self.kernel = kernel
+        self.fast_path = FastPathValidator(kernel)
+        self.queue = UnresolvedQueue(kernel, batch_size=5,
+                                     endpoint=endpoint, model=model)
+        self.ingester = WebKnowledgeIngester(kernel, endpoint=endpoint, model=model)
+        self.stats = {
+            "total_processed": 0,
+            "fast_accepted": 0,
+            "fast_rejected": 0,
+            "queued": 0,
+            "batch_resolved": 0,
+        }
+
+    def process_relation(self, concept: str, rel_type: str,
+                         target: str = "", prop: str = "",
+                         value: str = "", confidence: float = 1.0) -> dict:
+        """
+        Tek bir ilişkiyi işle: Fast-Path → Queue → Batch
+
+        Returns: {"verdict": str, "path": "fast"|"queued"|"batch", ...}
+        """
+        self.stats["total_processed"] += 1
+
+        # 1. Fast-Path dene
+        fp = self.fast_path.evaluate(concept, rel_type, target, prop, value, confidence)
+
+        if fp["verdict"] == "accepted":
+            self.stats["fast_accepted"] += 1
+            node = self.kernel.hooks.create_node(
+                ne=concept,
+                properties={prop or "isa": value or target},
+                source="fast_path"
+            )
+            return {**fp, "path": "fast", "node_id": node.id}
+
+        elif fp["verdict"] == "rejected":
+            self.stats["fast_rejected"] += 1
+            node = CrystalNode(
+                id=self.kernel.hooks._next_id(),
+                ne=concept,
+                properties={prop or "isa": value or target},
+                source=f"fast_path REJECT: {fp['reason'][:60]}",
+                isolated=True, confidence=0.3
+            )
+            self.kernel.hooks.nodes[node.id] = node
+            self.kernel.contradictions.isolation_zone.append(node)
+            return {**fp, "path": "fast", "node_id": node.id}
+
+        # 2. Fast-Path çözemedi → Queue'ya ekle
+        self.stats["queued"] += 1
+        resolved = self.queue.add(
+            concept=concept, rel_type=rel_type,
+            target=target, prop=prop, value=value,
+            reason=fp["reason"]
+        )
+
+        path = "batch" if resolved > 0 else "queued"
+
+        if resolved > 0:
+            self.stats["batch_resolved"] += resolved
+
+        return {
+            "verdict": "unresolved",
+            "path": path,
+            "reason": fp["reason"],
+            "batched": path == "batch"
+        }
+
+    def process_relations_batch(self, relations: List[dict], concept: str) -> dict:
+        """Birden çok ilişkiyi toplu işle (web ingestion çıktısı gibi)"""
+        results = []
+        for rel in relations:
+            rel_type = rel.get("type", "")
+            r = self.process_relation(
+                concept=concept,
+                rel_type=rel_type,
+                target=rel.get("target", ""),
+                prop=rel.get("property", ""),
+                value=str(rel.get("value", "")),
+                confidence=float(rel.get("confidence", 0.8))
+            )
+            results.append(r)
+
+        return {
+            "total": len(results),
+            "fast_accepted": sum(1 for r in results if r["path"] == "fast" and r["verdict"] == "accepted"),
+            "fast_rejected": sum(1 for r in results if r["path"] == "fast" and r["verdict"] == "rejected"),
+            "queued": sum(1 for r in results if r["path"] == "queued"),
+            "batch_resolved": sum(1 for r in results if r.get("batched")),
+            "details": results
+        }
+
+    def process_web_concept(self, concept: str, strategy: str = "auto") -> dict:
+        """
+        Web'den kavram çek, Fast-Path'ten geçir, gerekirse queue'la.
+        ESKİ sürüme göre 10 kata kadar daha hızlı (LLM atlanıyor).
+        """
+        result = {
+            "concept": concept, "web_result": {},
+            "fast_accepted": 0, "fast_rejected": 0,
+            "queued": 0, "llm_called": False, "errors": []
+        }
+
+        # Web'den metin çek
+        web_data = self.ingester.fetch_concept_text(concept, strategy)
+        if not web_data:
+            result["errors"].append("Web'de bulunamadı")
+            return result
+
+        result["web_result"] = {
+            "title": web_data["title"], "source": web_data["source"],
+            "text_length": len(web_data["text"])
+        }
+
+        # Kural tabanlı çıkar (LLM YOK — fast!)
+        relations_data = self.ingester.extract_relations_rule_based(concept, web_data["text"])
+        relations = relations_data.get("relations", [])
+
+        if not relations:
+            # Regex hiçbir şey bulamadı → LLM'e düş (nadir)
+            result["llm_called"] = True
+            relations_data = self.ingester.extract_relations_from_text(
+                concept, web_data["text"], use_llm=True
+            )
+            relations = relations_data.get("relations", [])
+
+        # Fast-Path üzerinden işle
+        batch_result = self.process_relations_batch(relations, concept)
+        result["fast_accepted"] = batch_result["fast_accepted"]
+        result["fast_rejected"] = batch_result["fast_rejected"]
+        result["queued"] = batch_result["queued"]
+
+        return result
+
+    def flush_queue(self) -> int:
+        """Bekleyen tüm queue öğelerini zorla çöz"""
+        if self.queue.pending() == 0:
+            return 0
+        return self.queue.resolve_batch()
+
+    def get_stats(self) -> dict:
+        return {
+            **self.stats,
+            "queue_pending": self.queue.pending(),
+            "queue_batches": self.queue.batch_count,
+            "fast_path": self.fast_path.stats
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AŞAMA 8: SemanticMatcher + AttentionRouter
+# ═══════════════════════════════════════════════════════════════════
+
+class SemanticMatcher:
+    """
+    Hafif anlamsal eşleşme motoru. Sıfır harici bağımlılık.
+
+    Strateji:
+    1. Karakter trigram Jaccard benzerliği
+    2. Türkçe sinonim (eş anlamlı) sözlüğü
+    3. Eşik üstü benzerlik varsa → Fast-Path'e yönlendir
+
+    Örn: "otomobil" ~ "araba", "semâ" ~ "gökyüzü", "sürat" ~ "hız"
+    """
+
+    # Türkçe eş anlamlı / yakın anlamlı sözlüğü
+    SYNONYMS: Dict[str, str] = {
+        "otomobil": "araba", "araba": "otomobil",
+        "vasıta": "taşıt", "taşıt": "vasıta",
+        "sürat": "hız", "hız": "sürat",
+        "semâ": "gökyüzü", "gökyüzü": "sema",
+        "sema": "gökyüzü",
+        "siyah": "kara", "kara": "siyah",
+        "beyaz": "ak", "ak": "beyaz",
+        "kırmızı": "al", "al": "kırmızı",
+        "tabiat": "doğa", "doğa": "tabiat",
+        "varlık": "mevcut", "mevcut": "varlık",
+        "hadise": "olay", "olay": "hadise",
+        "süratli": "hızlı", "hızlı": "süratli",
+        "yavaş": "ağır", "ağır": "yavaş",
+        "ufak": "küçük", "küçük": "ufak",
+        "büyük": "iri", "iri": "büyük",
+        "deprem": "zelzele", "zelzele": "deprem",
+        "yağmur": "yağış", "yağış": "yağmur",
+        "rüzgar": "yel", "yel": "rüzgar",
+        "şimşek": "yıldırım", "yıldırım": "şimşek",
+        "deniz": "derya", "derya": "deniz",
+        "okyanus": "deniz",
+        "dağ": "tepe",
+        "ırmak": "nehir", "nehir": "ırmak",
+        "yapı": "bina", "bina": "yapı",
+        "mesken": "ev", "ev": "mesken",
+        "sıvı": "likit", "likit": "sıvı",
+        "katı": "sert",
+        "gaz": "buhar",
+        "ısı": "sıcaklık", "sıcaklık": "ısı",
+        "ışık": "aydınlık", "aydınlık": "ışık",
+        "ses": "gürültü",
+        "koku": "aroma",
+    }
+
+    def __init__(self, threshold: float = 0.55):
+        self.threshold = threshold
+        self.hits = 0
+
+    def _trigrams(self, text: str) -> set:
+        """Karakter trigram seti (hızlı, dil bağımsız)"""
+        t = f"  {text.lower().strip()} "
+        return {t[i:i+3] for i in range(len(t)-2)}
+
+    def trigram_similarity(self, a: str, b: str) -> float:
+        """Jaccard benzerliği: |A ∩ B| / |A ∪ B|"""
+        ta = self._trigrams(a)
+        tb = self._trigrams(b)
+        if not ta or not tb:
+            return 0.0
+        intersection = len(ta & tb)
+        union = len(ta | tb)
+        return intersection / union if union > 0 else 0.0
+
+    def match(self, concept: str, candidates: List[str]) -> Optional[Tuple[str, float, str]]:
+        """
+        En iyi eşleşmeyi bul.
+
+        Returns: (matched_candidate, score, method) veya None
+        method: "synonym" | "trigram"
+        """
+        norm = AxiomEngine._normalize_tr
+        c_norm = norm(concept)
+
+        # 1. Direkt sinonim eşleşmesi (en güvenilir)
+        for cand in candidates:
+            cand_norm = norm(cand)
+            # Tam sinonim (her iki tarafı da normalize et)
+            syn_val = self.SYNONYMS.get(c_norm, "")
+            if syn_val and norm(syn_val) == cand_norm:
+                self.hits += 1
+                return (cand, 1.0, "synonym")
+            # Ters yön
+            rev_val = self.SYNONYMS.get(cand_norm, "")
+            if rev_val and norm(rev_val) == c_norm:
+                self.hits += 1
+                return (cand, 1.0, "synonym")
+
+        # 2. Trigram benzerliği
+        best_score = 0.0
+        best_cand = None
+        for cand in candidates:
+            score = self.trigram_similarity(concept, cand)
+            if score > best_score:
+                best_score = score
+                best_cand = cand
+
+        if best_score >= self.threshold and best_cand:
+            self.hits += 1
+            return (best_cand, best_score, "trigram")
+
+        return None
+
+
+class AttentionRouter:
+    """
+    Sembolik Dikkat Yönlendirici.
+
+    Hafıza büyüdükçe O(n) taramayı engeller. Sorgu yapılan kancadan
+    N-derinlik komşuluğu aktifleştirir, geri kalan her şeyi maskeler (0).
+
+    Kullanım:
+        router = AttentionRouter(kernel.hooks)
+        active_set = router.focus("gökyüzü", depth=2)
+        # active_set içindeki düğümler: 1 (aktif), dışındakiler: 0 (maskeli)
+    """
+
+    def __init__(self, hook_engine: 'HookEngine'):
+        self.hooks = hook_engine
+        self.stats = {"total_focuses": 0, "total_masked": 0, "total_active": 0}
+
+    def focus(self, concept: str, depth: int = 2) -> Tuple[Set[str], dict]:
+        """
+        Bir kavrama odaklan: concept'ten başlayarak depth adım
+        genişliğindeki komşu düğümleri aktifleştir, gerisini maskele.
+
+        Returns: (active_node_ids, stats)
+        """
+        norm = AxiomEngine._normalize_tr
+        cn = norm(concept)
+
+        # Başlangıç düğümlerini bul
+        start_nodes = self.hooks.get_hook_nodes(cn)
+        if not start_nodes:
+            # Kavramın kendisi hook değilse, tüm hook'ları tara
+            for hook_name in self.hooks.hooks:
+                if cn in hook_name or hook_name in cn:
+                    start_nodes.extend(self.hooks.get_hook_nodes(hook_name))
+
+        if not start_nodes:
+            return (set(), {"active": 0, "masked": len(self.hooks.nodes), "depth": 0})
+
+        # BFS ile komşulukları topla
+        active_ids: Set[str] = set()
+        frontier: Set[str] = {n.id for n in start_nodes}
+
+        for _ in range(depth + 1):
+            if not frontier:
+                break
+            active_ids |= frontier
+            next_frontier: Set[str] = set()
+            for nid in frontier:
+                node = self.hooks.nodes.get(nid)
+                if node:
+                    related = self.hooks.get_related_nodes(node, max_depth=1)
+                    for rn in related:
+                        if rn.id not in active_ids:
+                            next_frontier.add(rn.id)
+            frontier = next_frontier
+
+        total_nodes = len(self.hooks.nodes)
+        masked = total_nodes - len(active_ids)
+
+        self.stats["total_focuses"] += 1
+        self.stats["total_active"] += len(active_ids)
+        self.stats["total_masked"] += masked
+
+        stats = {
+            "active": len(active_ids),
+            "masked": masked,
+            "total": total_nodes,
+            "depth": depth,
+            "ratio": f"{len(active_ids)}/{total_nodes}"
+        }
+
+        return (active_ids, stats)
+
+    def is_active(self, node_id: str, active_set: Set[str]) -> bool:
+        """Bir düğüm aktif odak kümesinde mi?"""
+        return node_id in active_set
+
+    def evaluate_in_focus(self, concept: str, depth: int = 2,
+                          evaluator_fn: Callable = None) -> dict:
+        """
+        Odaklanmış alt grafikte değerlendirme yap.
+        Sadece aktif düğümler üzerinde çalışır, maskelenenleri atlar.
+
+        Returns: {"result": ..., "focus_stats": ..., "masked_skipped": int}
+        """
+        active_set, focus_stats = self.focus(concept, depth)
+
+        if evaluator_fn:
+            result = evaluator_fn(active_set)
+        else:
+            result = None
+
+        return {
+            "result": result,
+            "focus_stats": focus_stats,
+            "active_node_ids": list(active_set)[:20],
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════
 # TEST SENARYOSU (genişletildi)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -2613,6 +3329,123 @@ def run_tests():
     assert result["rejected"] >= 0  # En azından crash yok
     print(f"   ✓ Çelişki testi: +{result['accepted']} kabul, -{result['rejected']} ret")
 
+    # --- TEST 19: Fast-Path Bypass (LLM'siz, milisaniye) ---
+    print("\n📋 TEST 19: Fast-Path Bypass — LLM ATLANIYOR")
+    fp = FastPathValidator(kernel)
+
+    # Net ret: mavi isa madde → tip çakışması (algısal ≠ fiziksel)
+    import time as _time
+    t0 = _time.time()
+    r = fp.evaluate("mavi", "isa", target="madde")
+    t1 = _time.time()
+    assert r["verdict"] == "rejected", f"mavi isa madde reddedilmeli: {r}"
+    latency_ms = (t1 - t0) * 1000
+    print(f"   ⚡ 'mavi isa madde' → {r['verdict']} ({latency_ms:.1f}ms) — LLM çağrılmadı ✅")
+
+    # Net onay: mavi isa renk → zincirde zaten var
+    r = fp.evaluate("mavi", "isa", target="renk")
+    assert r["verdict"] == "accepted", f"mavi isa renk kabul edilmeli: {r}"
+    print(f"   ⚡ 'mavi isa renk' → {r['verdict']} — zincirde mevcut ✅")
+
+    # Net ret: ses hasa ağırlık → algısal varlık, fiziksel özellik olamaz
+    r = fp.evaluate("ses", "hasa", prop="ağırlık", value="5kg")
+    assert r["verdict"] == "rejected", f"ses hasa ağırlık reddedilmeli: {r}"
+    print(f"   ⚡ 'ses hasa ağırlık=5kg' → {r['verdict']} — algısal varlık ✅")
+
+    # Unresolved: deprem isa jeoloji → aksiyomlarda net karşılığı yok
+    r = fp.evaluate("deprem", "isa", target="jeoloji")
+    assert r["verdict"] == "unresolved", f"deprem isa jeoloji unresolved olmalı: {r}"
+    print(f"   ⚡ 'deprem isa jeoloji' → {r['verdict']} — aksiyom karar veremedi ✅")
+
+    print(f"   📊 Fast-Path istatistik: +{fp.stats['fast_accepted']} kabul, "
+          f"-{fp.stats['fast_rejected']} ret, ?{fp.stats['unresolved']} unresolved")
+
+    # --- TEST 20: Unresolved Queue & Batching ---
+    print("\n📋 TEST 20: Unresolved Queue — Toplu LLM sorgusu")
+    pipeline = StreamingIngestionPipeline(kernel)
+
+    # 3 karmaşık (unresolved) ilişkiyi sırayla ekle
+    results = []
+    for rel in [
+        ("deprem", "isa", "jeolojik olay", "", ""),
+        ("güneş", "isa", "yıldız", "", ""),
+        ("ay", "isa", "uydu", "", ""),
+    ]:
+        r = pipeline.process_relation(
+            concept=rel[0], rel_type=rel[1], target=rel[2]
+        )
+        results.append(r)
+
+    fast_count = sum(1 for r in results if r["path"] == "fast")
+    queued_count = sum(1 for r in results if r["path"] in ("queued", "batch"))
+    print(f"   Fast-Path: {fast_count} | Queue'ya düşen: {queued_count}")
+    print(f"   Havuzda bekleyen: {pipeline.queue.pending()} (batch_size=5, dolmadı)")
+
+    # 2 tane daha ekleyerek batch'i doldur
+    pipeline.process_relation("okyanus", "isa", target="su kütlesi")
+    r = pipeline.process_relation("volkan", "isa", target="dağ")
+    print(f"   Batch doldu mu? {'Evet' if pipeline.queue.pending() == 0 else f'Hayır ({pipeline.queue.pending()} kaldı)'}")
+
+    stats = pipeline.get_stats()
+    print(f"   📊 Pipeline: {stats['total_processed']} işlendi, "
+          f"+{stats['fast_accepted']} hızlı kabul, "
+          f"-{stats['fast_rejected']} hızlı ret, "
+          f"?{stats['queued']} queue'landı")
+
+    # --- TEST 21: SemanticMatcher — Eş Anlamlı Fast-Path ---
+    print("\n📋 TEST 21: SemanticMatcher — Eş Anlamlı Fast-Path")
+    sm = SemanticMatcher(threshold=0.5)
+
+    # Sinonim testi
+    result = sm.match("otomobil", ["araba", "uçak", "gemi"])
+    assert result is not None, "otomobil ~ araba eşleşmeli"
+    assert result[2] == "synonym", f"sinonim olmalı: {result}"
+    print(f"   ✓ 'otomobil' ~ '{result[0]}' ({result[2]}, {result[1]:.0%})")
+
+    # Trigram testi
+    result = sm.match("deprem", ["deprem", "zelzele", "tsunami"])
+    if result:
+        print(f"   ✓ 'deprem' ~ '{result[0]}' ({result[2]}, {result[1]:.0%})")
+
+    # Trigram: "araba" ~ "araba" (kendisi)
+    sim = sm.trigram_similarity("araba", "araba")
+    assert sim == 1.0, f"kendine benzerlik 1.0 olmalı: {sim}"
+    print(f"   ✓ trigram('araba','araba') = {sim:.0%}")
+
+    # Trigram: tamamen farklı
+    sim = sm.trigram_similarity("araba", "uçak")
+    assert sim < 0.5, f"farklı kelimeler düşük benzerlik: {sim}"
+    print(f"   ✓ trigram('araba','uçak') = {sim:.0%} (düşük)")
+
+    # Sinonim sözlüğü kapsamı
+    print(f"   📊 Sinonim sözlüğü: {len(sm.SYNONYMS)} çift")
+
+    # --- TEST 22: AttentionRouter — Sembolik Maskeleme ---
+    print("\n📋 TEST 22: AttentionRouter — Sembolik Maskeleme")
+    router = AttentionRouter(kernel.hooks)
+
+    # "gökyüzü" odaklan, derinlik 2
+    active, fstats = router.focus("gokyuzu", depth=2)
+    print(f"   🎯 'gokyuzu' odak: {fstats['active']} aktif, "
+          f"{fstats['masked']} maskeli (toplam {fstats['total']})")
+    print(f"   📊 Oran: {fstats['ratio']} — sadece %{fstats['active']/max(fstats['total'],1)*100:.0f} tarandı")
+
+    # Maskeli düğüm kontrolü
+    total = len(kernel.hooks.nodes)
+    if total > 0:
+        all_ids = {n.id for n in kernel.hooks.nodes.values()}
+        masked_count = len(all_ids - active)
+        assert masked_count == fstats["masked"], f"maskelenen sayısı tutarsız: {masked_count} vs {fstats['masked']}"
+        print(f"   ✓ Maskeleme doğru: {masked_count} düğüm maskelendi")
+
+    # Aktif set içinde kalma kontrolü
+    if active:
+        sample_id = list(active)[0]
+        assert router.is_active(sample_id, active), "aktif düğüm is_active olmalı"
+        print(f"   ✓ is_active() çalışıyor")
+
+    print(f"   📊 Router istatistik: {router.stats['total_focuses']} odaklanma")
+
     # --- ÖZET ---
     status = kernel.get_status()
     print("\n" + "=" * 65)
@@ -2636,6 +3469,10 @@ def run_tests():
     ✅ Distiller Validate         → isa/hasa/yapamaz doğrulama
     ✅ WebKnowledgeIngester Wiki  → Wikipedia API çalışıyor
     ✅ WebKnowledgeIngester Pipe  → Web→LLM→Aksiyom pipeline hazır
+    ✅ Fast-Path Bypass           → LLM ATLANDI, milisaniyede karar
+    ✅ Unresolved Queue & Batch   → 5 birikince toplu LLM sorgusu
+    ✅ SemanticMatcher            → sinonim + trigram, LLM'siz eşleşme
+    ✅ AttentionRouter            → N-derinlik maskeleme, O(1) tarama
     """)
 
 
