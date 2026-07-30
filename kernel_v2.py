@@ -2706,14 +2706,9 @@ class UnresolvedQueue:
         # Toplu prompt oluştur
         items_json = json.dumps(batch, ensure_ascii=False, indent=2)
         system_prompt = (
-            "Sen bir mantık hakemisin. Sana çözülememiş ilişki önermeleri verilecek. "
-            "Her biri için KESİN karar ver: ACCEPT veya REJECT. "
-            "CEVABIN SADECE ŞU JSON FORMATINDA OLSUN:\n"
-            '{"decisions": [{"index": 0, "verdict": "ACCEPT", "reason": "..."}, ...]}\n'
-            "ACCEPT: önerme doğru, bilgi tabanına eklenebilir.\n"
-            "REJECT: önerme yanlış veya çelişkili, reddedilmeli."
+            'Reply ONLY with JSON: {"decisions":[{"index":0,"verdict":"ACCEPT","reason":"..."}]}'
         )
-        user_prompt = f"Aşağıdaki önermeleri değerlendir:\n{items_json}"
+        user_prompt = f"Judge these:\n{items_json}"
 
         payload = json.dumps({
             "model": self.model,
