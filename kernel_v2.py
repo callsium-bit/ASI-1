@@ -1290,15 +1290,73 @@ class ASIKernel:
                                  strategy: str = "auto",
                                  delay: float = 2.0) -> dict:
         """
-        KESİNTİSİZ web'den bilgi çekme döngüsü.
-        Gap kalmayana kadar devam eder.
+        KESİNTİSİZ web'den bilgi çekme döngüsü. V2: Fast-Path öncelikli.
+        Regex + FastPath → sadece unresolved'lar batch LLM'e.
 
         Kullanım: kernel.continuous_web_ingestion(max_iterations=10)
         """
-        ingester = self.get_web_ingester(endpoint=endpoint, model=model)
-        return ingester.continuous_ingestion_loop(
-            max_iterations=max_iterations, strategy=strategy, delay_between=delay
-        )
+        pipeline = StreamingIngestionPipeline(self, endpoint=endpoint, model=model)
+        
+        summary = {
+            "iterations": 0, "concepts_processed": [],
+            "total_accepted": 0, "total_rejected": 0, "total_queued": 0,
+            "stopped_by": "gaps_exhausted", "per_concept": {}
+        }
+        
+        iteration = 0
+        while max_iterations == 0 or iteration < max_iterations:
+            from kernel_v2 import LocalLLMDistiller
+            distiller = LocalLLMDistiller(self)
+            gaps = distiller.detect_gaps(limit=20)
+            
+            if not gaps:
+                print("\n   ✅ Tüm boşluklar dolduruldu!")
+                break
+                
+            iteration += 1
+            print(f"\n{'='*50}")
+            print(f"🔄 Tur #{iteration}: {len(gaps)} boşluk")
+            print(f"{'='*50}")
+            
+            processed = 0
+            for gap in gaps:
+                concept = gap["concept"]
+                if concept in summary["concepts_processed"]:
+                    continue
+                    
+                print(f"\n   🎯 [{gap['type']}] {concept}")
+                
+                # Streaming pipeline: regex → FastPath → Queue → Batch
+                r = pipeline.process_web_concept(concept, strategy)
+                
+                summary["concepts_processed"].append(concept)
+                summary["total_accepted"] += r["fast_accepted"]
+                summary["total_rejected"] += r["fast_rejected"]
+                summary["total_queued"] += r.get("queued", 0)
+                
+                fast = r['fast_accepted'] + r['fast_rejected']
+                llm = "⚡LLM" if r.get("llm_called") else "⚡Fast"
+                print(f"      {llm} +{r['fast_accepted']} kabul, -{r['fast_rejected']} ret, "
+                      f"?{r.get('queued',0)} queue")
+                
+                processed += 1
+                time.sleep(delay)
+            
+            summary["iterations"] = iteration
+            
+            # Queue'da biriken varsa batch olarak LLM'e gönder
+            pending = pipeline.queue.pending()
+            if pending > 0:
+                print(f"\n   📬 Queue'da {pending} öğe birikti. Batch çözülüyor...")
+                resolved = pipeline.flush_queue()
+                summary["total_accepted"] += resolved
+                print(f"   ✅ Batch: {resolved} çözüldü")
+            
+            if processed == 0:
+                summary["stopped_by"] = "no_progress"
+                break
+                
+        return summary
 
 
 # ═══════════════════════════════════════════════════════════════════
