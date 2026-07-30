@@ -1853,7 +1853,7 @@ class WebKnowledgeIngester:
                  endpoint: str = "http://localhost:1234/v1/chat/completions",
                  model: str = "local-model",
                  language: str = "tr",
-                 timeout: int = 30,
+                 timeout: int = 120,
                  min_confidence: float = 0.7):
         self.kernel = kernel
         self.endpoint = endpoint

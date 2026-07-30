@@ -1,0 +1,98 @@
+{
+  "timestamp": "2026-07-30T01:42:05.318358",
+  "initial_state": {
+    "total_axioms": 20,
+    "total_nodes": 7,
+    "total_hooks": 27,
+    "isolated_nodes": 0,
+    "entity_types": {
+      "madde": "fiziksel",
+      "yercekimi_etkisinde": "soyut",
+      "su": "fiziksel",
+      "sivi": "soyut",
+      "temas_ettigini": "soyut",
+      "yagmur": "olay",
+      "kar": "olay",
+      "duman": "soyut",
+      "gaz": "soyut",
+      "renk": "algisal",
+      "algisal_ozellik": "soyut",
+      "fiziksel_eylem": "soyut",
+      "mavi": "algisal",
+      "yesil": "algisal",
+      "kirmizi": "algisal",
+      "sari": "algisal",
+      "sebep": "soyut",
+      "sonuc": "soyut",
+      "herhangi": "soyut",
+      "hem_x_hem_degil_x": "soyut",
+      "gokyuzu": "soyut",
+      "gorunur_renk": "soyut",
+      "yukarida": "soyut",
+      "gunes": "soyut",
+      "sicak": "soyut",
+      "gece": "soyut",
+      "karanlik": "soyut",
+      "ses": "algisal",
+      "koku": "algisal"
+    },
+    "conversation_turns": 0
+  },
+  "concepts_processed": [
+    {
+      "concept": "yagmur",
+      "source": "Yağmur",
+      "relations": 3,
+      "accepted": 0,
+      "rejected": 0
+    },
+    {
+      "concept": "su",
+      "source": "Su",
+      "relations": 3,
+      "accepted": 0,
+      "rejected": 0
+    }
+  ],
+  "errors": [
+    "gokyuzu: Wikipedia'da bulunamadı"
+  ],
+  "final_state": {
+    "total_axioms": 20,
+    "total_nodes": 7,
+    "total_hooks": 27,
+    "isolated_nodes": 0,
+    "entity_types": {
+      "madde": "fiziksel",
+      "yercekimi_etkisinde": "soyut",
+      "su": "fiziksel",
+      "sivi": "soyut",
+      "temas_ettigini": "soyut",
+      "yagmur": "olay",
+      "kar": "olay",
+      "duman": "soyut",
+      "gaz": "soyut",
+      "renk": "algisal",
+      "algisal_ozellik": "soyut",
+      "fiziksel_eylem": "soyut",
+      "mavi": "algisal",
+      "yesil": "algisal",
+      "kirmizi": "algisal",
+      "sari": "algisal",
+      "sebep": "soyut",
+      "sonuc": "soyut",
+      "herhangi": "soyut",
+      "hem_x_hem_degil_x": "soyut",
+      "gokyuzu": "soyut",
+      "gorunur_renk": "soyut",
+      "yukarida": "soyut",
+      "gunes": "soyut",
+      "sicak": "soyut",
+      "gece": "soyut",
+      "karanlik": "soyut",
+      "ses": "algisal",
+      "koku": "algisal"
+    },
+    "conversation_turns": 0
+  }
+}
