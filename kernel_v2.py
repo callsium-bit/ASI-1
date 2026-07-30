@@ -2836,6 +2836,13 @@ class FastPathValidator:
                         "reason": f"Tip çakışması: '{concept}' ({concept_type.value}), "
                                   f"'{target}' ({target_type.value}). Uyuşmaz kategoriler."
                     }
+                # Aynı tip → kabul et (örn: güneş FIZIKSEL, yıldız FIZIKSEL)
+                if concept_type == target_type and concept_type != EntityType.SOYUT:
+                    self.stats["fast_accepted"] += 1
+                    return {
+                        "verdict": "accepted",
+                        "reason": f"Tip uyumu: '{concept}' ve '{target}' aynı kategoride ({concept_type.value})."
+                    }
 
             # Net onay: X isa Y ve Y, X'in zincirinde zaten var
             if norm(target) in chain:
