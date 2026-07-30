@@ -3168,17 +3168,15 @@ class StreamingIngestionPipeline:
 
         elif fp["verdict"] == "rejected":
             self.stats["fast_rejected"] += 1
-            node = CrystalNode(
-                id=self.kernel.hooks._next_id(),
-                ne=concept,
-                properties={prop or "isa": value or target},
-                source=f"fast_path REJECT: {fp['reason'][:60]}",
-                isolated=True, confidence=0.3,
-                status="isolated"
+            # ✅ gate üzerinden geç (izolasyon + metadata korunur)
+            props = {prop or "isa": value or target}
+            gate_result = self.kernel.contradictions.gate(
+                ne=concept, properties=props,
+                source=f"fast_path_REJECT:{fp['reason'][:40]}",
+                confidence=0.2
             )
-            self.kernel.hooks.nodes[node.id] = node
-            self.kernel.contradictions.isolation_zone.append(node)
-            return {**fp, "path": "fast", "node_id": node.id}
+            return {**fp, "path": "fast", "node_id": gate_result["node_id"],
+                    "gate_accepted": False, "isolated": True}
 
         # 2. Fast-Path çözemedi → Queue'ya ekle
         self.stats["queued"] += 1
