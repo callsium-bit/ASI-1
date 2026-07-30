@@ -2440,7 +2440,32 @@ class WebKnowledgeIngester:
         # Cümlelere böl
         sentences = re.split(r'(?<=[.!?])\s+', text_clean)
 
-        # ── KALIPLAR (öncelik sıralı) ──────────────────────
+        # ── STRATEJİ: İlk cümle ALTIN değerinde (tanım cümlesi) ──
+        # "X, ... bir Y'dir" kalıbı → %90+ doğru
+        
+        # İlk cümleyi özel işle
+        first_sent = sentences[0] if sentences else ""
+        
+        # Altın kalıp: "X, (....) bir Y'dir/dır"
+        gold_isa = re.compile(
+            r'(?:,?\s*(?:[\w\sğüşıöçĞÜŞİÖÇ,]{0,80}?)\s*bir\s+)'
+            r'(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{2,50}?)'
+            r'(?:\'?dir|\'?dır|tir|tır|tur|tür)[\s.!]',
+            re.I
+        )
+        
+        m = gold_isa.search(first_sent)
+        if m:
+            target = m.group("target").strip().rstrip('.,;:!?')
+            if 2 <= len(target) <= 50 and target.lower() != concept.lower():
+                relations.append({
+                    "type": "isa",
+                    "target": target,
+                    "confidence": 0.90,  # YÜKSEK güven — ilk cümle
+                    "evidence": first_sent[:150]
+                })
+        
+        # Diğer cümleler için daha sıkı regex
 
         # Kalıp 1: "X, bir Y'dir" / "X bir Y olarak tanımlanır" → isa Y
         isa_patterns = [
