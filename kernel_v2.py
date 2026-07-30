@@ -2446,7 +2446,7 @@ class WebKnowledgeIngester:
         # İlk cümleyi özel işle
         first_sent = sentences[0] if sentences else ""
         
-        # Altın kalıp: "X, (....) bir Y'dir/dır"
+        # Altın kalıp 1: "X, (....) bir Y'dir/dır"
         gold_isa = re.compile(
             r'(?:,?\s*(?:[\w\sğüşıöçĞÜŞİÖÇ,]{0,80}?)\s*bir\s+)'
             r'(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{2,50}?)'
@@ -2459,11 +2459,24 @@ class WebKnowledgeIngester:
             target = m.group("target").strip().rstrip('.,;:!?')
             if 2 <= len(target) <= 50 and target.lower() != concept.lower():
                 relations.append({
-                    "type": "isa",
-                    "target": target,
-                    "confidence": 0.90,  # YÜKSEK güven — ilk cümle
-                    "evidence": first_sent[:150]
+                    "type": "isa", "target": target,
+                    "confidence": 0.90, "evidence": first_sent[:150]
                 })
+        else:
+            # Altın kalıp 2: "X, ... Y'dir" (bir olmadan)
+            gold_isa2 = re.compile(
+                r',\s*(?P<target>[\w\sğüşıöçĞÜŞİÖÇ]{3,60}?)'
+                r'(?:\'?dir|\'?dır|tir|tır)[\s.!]',
+                re.I
+            )
+            m2 = gold_isa2.search(first_sent)
+            if m2:
+                target = m2.group("target").strip().rstrip('.,;:!?')
+                if 2 <= len(target) <= 50 and target.lower() != concept.lower():
+                    relations.append({
+                        "type": "isa", "target": target,
+                        "confidence": 0.85, "evidence": first_sent[:150]
+                    })
         
         # Diğer cümleler için daha sıkı regex
 
