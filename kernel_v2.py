@@ -218,9 +218,12 @@ class AxiomEngine:
 
     def _infer_entity_type(self, name: str) -> EntityType:
         renkler = {"mavi", "kirmizi", "yesil", "sari", "beyaz", "siyah", "mor", "turuncu", "pembe", "lacivert"}
-        maddeler = {"su", "tas", "toprak", "hava", "demir", "tahta", "cam", "plastik", "altin", "gumus", "madde"}
-        algilar = {"renk", "ses", "koku", "tat", "isik", "goruntu"}
-        olaylar = {"yagmur", "ruzgar", "kar", "firtina", "deprem", "gok_gurlemesi", "dolu", "sel"}
+        maddeler = {"su", "tas", "toprak", "hava", "demir", "tahta", "cam", "plastik", "altin", "gumus", "madde",
+                   "yildiz", "gezegen", "uydu", "asteroit", "kuyrukluyildiz", "gunes", "ay", "dunya", "mars",
+                   "jupiter", "saturn", "venus", "merkur", "neptun", "uranyus", "pluton"}
+        algilar = {"renk", "ses", "koku", "tat", "isik", "goruntu", "sicak", "soguk", "karanlik", "aydinlik"}
+        olaylar = {"yagmur", "ruzgar", "kar", "firtina", "deprem", "gok_gurlemesi", "dolu", "sel",
+                  "zelzele", "tsunami", "hortum", "yangin", "cig", "heyelan", "volkan"}
         name_norm = self._normalize_tr(name)
         if name_norm in renkler or name_norm in algilar:
             return EntityType.ALGISAL
@@ -240,6 +243,10 @@ class AxiomEngine:
                 parent_type = self.get_entity_type(parent)
                 if parent_type:
                     return parent_type
+        # Fallback: sözlükten tahmin et
+        inferred = self._infer_entity_type(name)
+        if inferred != EntityType.SOYUT:
+            return inferred
         return None
 
     def find_axioms_about(self, entity_name: str) -> List[Axiom]:
