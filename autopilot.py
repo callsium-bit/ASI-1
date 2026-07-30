@@ -11,7 +11,7 @@ sys.path.insert(0, SCRIPT_DIR)
 from kernel_v2 import ASIKernel, WebKnowledgeIngester, FastPathValidator, AttentionRouter
 
 ENDPOINT = "http://localhost:1234/v1/chat/completions"
-MODEL = "mistralai/mistral-7b-instruct-v0.3"
+MODEL = "google/gemma-4-e4b"
 MAX_CONCEPTS = 3  # Her turda işlenecek kavram
 REPORT_FILE = os.path.join(SCRIPT_DIR, "autopilot_report.json")
 
