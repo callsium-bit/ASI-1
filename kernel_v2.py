@@ -22,6 +22,7 @@ import urllib.parse
 import html
 import time
 import threading
+import os
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -113,6 +114,11 @@ class CrystalNode:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     # NEW: ilişki ağırlıkları
     edge_weights: Dict[str, float] = field(default_factory=dict)
+    # Evidence tabanlı metadata
+    verification_count: int = 1
+    contradiction_count: int = 0
+    evidence: List[str] = field(default_factory=list)
+    status: str = "active"  # "active" | "isolated" | "pending"
 
     def get_5n1k_vector(self) -> Tuple[str, ...]:
         return (self.ne, self.nerede, self.ne_zaman, self.nasil, self.neden, self.kim)
@@ -123,7 +129,11 @@ class CrystalNode:
             "ne_zaman": self.ne_zaman, "nasil": self.nasil, "neden": self.neden,
             "kim": self.kim, "properties": self.properties,
             "hooks": list(self.hooks), "confidence": self.confidence,
-            "isolated": self.isolated
+            "isolated": self.isolated, "source": self.source,
+            "created_at": self.created_at,
+            "verification_count": self.verification_count,
+            "contradiction_count": self.contradiction_count,
+            "evidence": self.evidence, "status": self.status
         }
 
 
@@ -355,27 +365,81 @@ class AxiomEngine:
 # ═══════════════════════════════════════════════════════════════════
 
 class HookEngine:
+    # Diminishing returns sabiti: her yeni doğrulama confidence'ı
+    # bu oran kadar artırır (giderek azalan etki)
+    CONFIDENCE_DECAY = 0.5
+
     def __init__(self):
         self.nodes: Dict[str, CrystalNode] = {}
         self.hooks: Dict[str, Set[str]] = {}
         self._node_counter = 0
+        self.dedup_stats = {"duplicates_found": 0, "new_nodes": 0}
 
     def _next_id(self) -> str:
         self._node_counter += 1
         return f"cn_{self._node_counter:04d}"
+
+    def find_duplicate(self, ne: str, properties: dict) -> Optional[CrystalNode]:
+        """Aynı (ne + properties) eşleşmesine sahip mevcut düğümü bul."""
+        norm = AxiomEngine._normalize_tr
+        ne_norm = norm(ne)
+        for node in self.nodes.values():
+            if node.isolated:
+                continue
+            if norm(node.ne) != ne_norm:
+                continue
+            # Property eşleşmesi: tüm key-value çiftleri aynı mı?
+            if not properties and not node.properties:
+                return node
+            if properties and node.properties:
+                match = True
+                for k, v in properties.items():
+                    node_val = node.properties.get(k)
+                    if node_val is None:
+                        # Farklı property key → farklı düğüm
+                        match = False
+                        break
+                    if norm(str(node_val)) != norm(str(v)):
+                        match = False
+                        break
+                if match and len(properties) == len(node.properties):
+                    return node
+        return None
+
+    def _update_duplicate(self, existing: CrystalNode, source: str,
+                          confidence: float = 1.0) -> CrystalNode:
+        """Mevcut düğümün verification metadata'sını güncelle (diminishing returns)."""
+        existing.verification_count += 1
+        # Diminishing returns: yeni confidence = 1 - (1 - eski) * decay
+        remaining = 1.0 - existing.confidence
+        boost = remaining * self.CONFIDENCE_DECAY
+        existing.confidence = min(existing.confidence + boost, 0.99)
+        # Evidence ekle
+        if source and source not in existing.evidence:
+            existing.evidence.append(source)
+        self.dedup_stats["duplicates_found"] += 1
+        return existing
 
     def create_node(self, ne: str, nerede: str = "evrensel",
                     ne_zaman: str = "her_zaman", nasil: str = "",
                     neden: str = "", kim: str = "",
                     properties: dict = None, source: str = "gozlem",
                     confidence: float = 1.0) -> CrystalNode:
+        props = properties or {}
+        # Deduplication: aynı bilgi zaten varsa güncelle
+        existing = self.find_duplicate(ne, props)
+        if existing:
+            return self._update_duplicate(existing, source, confidence)
+        # Yeni düğüm oluştur
         node = CrystalNode(
             id=self._next_id(), ne=ne, nerede=nerede, ne_zaman=ne_zaman,
             nasil=nasil, neden=neden, kim=kim,
-            properties=properties or {}, source=source, confidence=confidence
+            properties=props, source=source, confidence=confidence,
+            evidence=[source] if source else []
         )
         self.nodes[node.id] = node
         self._hook_node(node)
+        self.dedup_stats["new_nodes"] += 1
         return node
 
     def _hook_node(self, node: CrystalNode):
@@ -513,7 +577,8 @@ class TurkishParser:
         root = TurkishParser.strip_suffixes(rest).rstrip("'")
 
         # Kök bir renk mi?
-        if root.lower() in TurkishParser.COLOR_WORDS or norm(root) in TurkishParser.COLOR_WORDS:
+        norm_colors = {norm(c) for c in TurkishParser.COLOR_WORDS}
+        if root.lower() in TurkishParser.COLOR_WORDS or norm(root) in norm_colors:
             return {"ne": ne, "properties": {"renk": root.lower()}}
 
         # Genel nitelik
@@ -683,6 +748,70 @@ class ContradictionEngine:
             self.isolation_zone = [n for n in self.isolation_zone if n.id != node_id]
             return {"status": "reddedildi", "node_id": node_id}
         return {"status": "manuel_cozum_bekliyor", "node_id": node_id}
+
+    def gate(self, ne: str, properties: dict, source: str = "gozlem",
+             confidence: float = 1.0, rel_type: str = "hasa") -> dict:
+        """
+        Contradiction Gate — Crystal'a yazmadan önce ZORUNLU geçiş noktası.
+
+        Akış:
+        1. Her property için çelişki kontrolü (aksiyom + mevcut düğüm)
+        2. Çelişki yoksa → create_node (dedup otomatik halleder)
+        3. Çelişki varsa → izole alan
+
+        Returns: {"accepted": bool, "node_id": str, "reason": str,
+                  "is_duplicate": bool, "contradiction_count": int}
+        """
+        result = {
+            "accepted": False, "node_id": None, "reason": "",
+            "is_duplicate": False, "contradiction_count": 0
+        }
+
+        # Her property için çelişki kontrolü
+        has_conflict = False
+        conflict_reasons = []
+        for prop_name, prop_value in properties.items():
+            eval_result = self.evaluate_statement(
+                subject=ne, predicate=prop_name,
+                object_=str(prop_value), relation=rel_type
+            )
+            if not eval_result["accepted"]:
+                has_conflict = True
+                conflict_reasons.append(eval_result["reason"])
+
+        if has_conflict:
+            # Çelişkili → izole alan
+            node = CrystalNode(
+                id=self.hooks._next_id(), ne=ne,
+                properties=properties, source=source,
+                isolated=True, confidence=0.3,
+                status="isolated",
+                evidence=[source] if source else []
+            )
+            self.hooks.nodes[node.id] = node
+            self.isolation_zone.append(node)
+            result["node_id"] = node.id
+            result["reason"] = "; ".join(conflict_reasons)
+            result["contradiction_count"] = len(conflict_reasons)
+            return result
+
+        # Çelişki yok → dedup kontrollü create_node
+        # (HookEngine.create_node zaten dedup yapıyor)
+        existing = self.hooks.find_duplicate(ne, properties)
+        is_dup = existing is not None
+
+        node = self.hooks.create_node(
+            ne=ne, properties=properties, source=source,
+            confidence=confidence
+        )
+        result["accepted"] = True
+        result["node_id"] = node.id
+        result["is_duplicate"] = is_dup
+        if is_dup:
+            result["reason"] = f"Mevcut bilgi güncellendi (doğrulama #{node.verification_count})"
+        else:
+            result["reason"] = "Yeni bilgi kaydedildi"
+        return result
 
 
 class FreeAssociationEngine:
@@ -898,15 +1027,119 @@ class DecoderEngine:
 
 
 # ═══════════════════════════════════════════════════════════════════
+# PERSISTENCE LAYER — JSON tabanlı kalıcı hafıza
+# ═══════════════════════════════════════════════════════════════════
+
+class KnowledgeStore:
+    """
+    JSON tabanlı kalıcı bilgi deposu.
+
+    Tüm Crystal düğümlerini ve metadata'yı diske kaydeder/yükler.
+    Korunan veriler: confidence, verification_count, evidence,
+    source, timestamp, contradiction_count, status.
+    """
+
+    DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "knowledge_store.json")
+
+    @staticmethod
+    def save(hook_engine: 'HookEngine', isolation_zone: List[CrystalNode],
+             path: str = None) -> dict:
+        """Tüm Crystal düğümlerini JSON'a kaydet."""
+        path = path or KnowledgeStore.DEFAULT_PATH
+        data = {
+            "version": 2,
+            "saved_at": datetime.now().isoformat(),
+            "node_counter": hook_engine._node_counter,
+            "nodes": [],
+            "isolated_ids": [n.id for n in isolation_zone]
+        }
+        for node in hook_engine.nodes.values():
+            data["nodes"].append(node.to_dict())
+
+        with open(path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+        return {
+            "saved": len(data["nodes"]),
+            "isolated": len(data["isolated_ids"]),
+            "path": path
+        }
+
+    @staticmethod
+    def load(hook_engine: 'HookEngine', contradiction_engine: 'ContradictionEngine',
+             path: str = None) -> dict:
+        """JSON'dan Crystal düğümlerini yükle."""
+        path = path or KnowledgeStore.DEFAULT_PATH
+        if not os.path.exists(path):
+            return {"loaded": 0, "error": "Dosya bulunamadı"}
+
+        try:
+            with open(path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, IOError) as e:
+            return {"loaded": 0, "error": str(e)}
+
+        loaded = 0
+        isolated_ids = set(data.get("isolated_ids", []))
+
+        # node_counter'ı geri yükle
+        hook_engine._node_counter = data.get("node_counter", 0)
+
+        for nd in data.get("nodes", []):
+            node = CrystalNode(
+                id=nd["id"],
+                ne=nd.get("ne", ""),
+                nerede=nd.get("nerede", "evrensel"),
+                ne_zaman=nd.get("ne_zaman", "her_zaman"),
+                nasil=nd.get("nasil", ""),
+                neden=nd.get("neden", ""),
+                kim=nd.get("kim", ""),
+                properties=nd.get("properties", {}),
+                confidence=nd.get("confidence", 1.0),
+                source=nd.get("source", "loaded"),
+                isolated=nd.get("isolated", False),
+                created_at=nd.get("created_at", datetime.now().isoformat()),
+                verification_count=nd.get("verification_count", 1),
+                contradiction_count=nd.get("contradiction_count", 0),
+                evidence=nd.get("evidence", []),
+                status=nd.get("status", "active")
+            )
+            hook_engine.nodes[node.id] = node
+            hook_engine._hook_node(node)
+
+            if node.id in isolated_ids or node.isolated:
+                node.isolated = True
+                node.status = "isolated"
+                contradiction_engine.isolation_zone.append(node)
+
+            loaded += 1
+
+        return {
+            "loaded": loaded,
+            "isolated": len(contradiction_engine.isolation_zone),
+            "path": path,
+            "saved_at": data.get("saved_at", "?")
+        }
+
+    @staticmethod
+    def exists(path: str = None) -> bool:
+        path = path or KnowledgeStore.DEFAULT_PATH
+        return os.path.exists(path)
+
+
+# ═══════════════════════════════════════════════════════════════════
 # ANA KERNEL v2 — Tüm Aşamalar Entegre
 # ═══════════════════════════════════════════════════════════════════
 
 class ASIKernel:
     """
     ASI Prototip v2 — 4 aşamalı tam entegrasyon.
+    Persistence destekli: knowledge_store.json varsa otomatik yükler.
     """
 
-    def __init__(self, decoder_mode: str = "template"):
+    def __init__(self, decoder_mode: str = "template",
+                 knowledge_path: str = None, auto_load: bool = True):
         self.axioms = AxiomEngine()
         self.hooks = HookEngine()
         self.contradictions = ContradictionEngine(self.axioms, self.hooks)
@@ -914,7 +1147,17 @@ class ASIKernel:
         self.decoder = DecoderEngine(mode=decoder_mode)
         self.parser = TurkishParser()
         self.conversation_log: List[dict] = []
-        self._seed_knowledge()
+        self._knowledge_path = knowledge_path
+
+        # Kalıcı hafıza: varsa yükle, yoksa tohum veri ile başla
+        loaded = False
+        if auto_load and KnowledgeStore.exists(knowledge_path):
+            result = KnowledgeStore.load(self.hooks, self.contradictions, knowledge_path)
+            if result.get("loaded", 0) > 0:
+                loaded = True
+
+        if not loaded:
+            self._seed_knowledge()
 
     def _seed_knowledge(self):
         """Temel dünya bilgisini kristal düğüm olarak yükle"""
@@ -929,6 +1172,20 @@ class ASIKernel:
         ]
         for ne, props in seeds:
             self.hooks.create_node(ne=ne, properties=props, source="tohum_veri")
+
+    def save_knowledge(self, path: str = None) -> dict:
+        """Bilgi tabanını diske kaydet."""
+        return KnowledgeStore.save(
+            self.hooks, self.contradictions.isolation_zone,
+            path or self._knowledge_path
+        )
+
+    def load_knowledge(self, path: str = None) -> dict:
+        """Bilgi tabanını diskten yükle."""
+        return KnowledgeStore.load(
+            self.hooks, self.contradictions,
+            path or self._knowledge_path
+        )
 
     # --- SORGU ---
 
@@ -2741,13 +2998,15 @@ class UnresolvedQueue:
                     verdict = decision.get("verdict", "REJECT")
 
                     if verdict == "ACCEPT":
-                        node = self.kernel.hooks.create_node(
-                            ne=item["concept"],
-                            properties={item.get("prop", "nitelik"): item.get("value", item.get("target", ""))},
+                        # ✅ DÜZELTME: gate üzerinden geç (contradiction + dedup)
+                        props = {item.get("prop", "nitelik"): item.get("value", item.get("target", ""))}
+                        gate_result = self.kernel.contradictions.gate(
+                            ne=item["concept"], properties=props,
                             source=f"batch_resolver #{self.batch_count}",
                             confidence=0.7
                         )
-                        resolved += 1
+                        if gate_result["accepted"]:
+                            resolved += 1
                     else:
                         # Reject → izole
                         node = CrystalNode(
@@ -2755,7 +3014,8 @@ class UnresolvedQueue:
                             ne=item["concept"],
                             properties={item.get("prop", "nitelik"): item.get("value", item.get("target", ""))},
                             source=f"batch_resolver REJECT #{self.batch_count}",
-                            isolated=True, confidence=0.3
+                            isolated=True, confidence=0.3,
+                            status="isolated"
                         )
                         self.kernel.hooks.nodes[node.id] = node
                         self.kernel.contradictions.isolation_zone.append(node)
@@ -2844,12 +3104,15 @@ class StreamingIngestionPipeline:
 
         if fp["verdict"] == "accepted":
             self.stats["fast_accepted"] += 1
-            node = self.kernel.hooks.create_node(
-                ne=concept,
-                properties={prop or "isa": value or target},
-                source="fast_path"
+            # ✅ DÜZELTME: gate üzerinden geç (contradiction + dedup)
+            props = {prop or "isa": value or target}
+            gate_result = self.kernel.contradictions.gate(
+                ne=concept, properties=props,
+                source="fast_path", confidence=confidence
             )
-            return {**fp, "path": "fast", "node_id": node.id}
+            return {**fp, "path": "fast", "node_id": gate_result["node_id"],
+                    "gate_accepted": gate_result["accepted"],
+                    "is_duplicate": gate_result["is_duplicate"]}
 
         elif fp["verdict"] == "rejected":
             self.stats["fast_rejected"] += 1
@@ -2858,7 +3121,8 @@ class StreamingIngestionPipeline:
                 ne=concept,
                 properties={prop or "isa": value or target},
                 source=f"fast_path REJECT: {fp['reason'][:60]}",
-                isolated=True, confidence=0.3
+                isolated=True, confidence=0.3,
+                status="isolated"
             )
             self.kernel.hooks.nodes[node.id] = node
             self.kernel.contradictions.isolation_zone.append(node)
