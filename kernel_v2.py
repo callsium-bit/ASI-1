@@ -1275,6 +1275,22 @@ class ASIKernel:
                             "from_memory": True
                         }
 
+                # 1b. KISMI EŞLEŞME: expr, düğüm adının bir parçasıysa
+                if not expr_nodes:
+                    expr_norm = norm(expr)
+                    for node in self.hooks.nodes.values():
+                        if node.isolated:
+                            continue
+                        if expr_norm in norm(node.ne) or norm(node.ne) in expr_norm:
+                            props = node.properties
+                            if "isa" in props:
+                                return {
+                                    "question": question, "entity": node.ne,
+                                    "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
+                                    "source": node.source, "confidence": node.confidence,
+                                    "from_memory": True
+                                }
+
             # 2. Kelime bazlı (tek kelimelik kavramlar)
             for word in words:
                 if norm(word) in {"nedir", "ne", "neymiş", "kimdir", "mi", "mu", "mı", "mü", "?", ""}:
