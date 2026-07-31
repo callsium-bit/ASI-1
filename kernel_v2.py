@@ -1270,7 +1270,7 @@ class ASIKernel:
                     if "isa" in props:
                         return {
                             "question": question, "entity": node.ne,
-                            "answer": f"{node.ne}, {props['isa']}'dir.",
+                            "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
                             "source": node.source, "confidence": node.confidence,
                             "from_memory": True
                         }
@@ -1286,12 +1286,9 @@ class ASIKernel:
                     props = node.properties
                     if "isa" in props:
                         return {
-                            "question": question,
-                            "entity": node.ne,
-                            "answer": f"{node.ne}, {props['isa']}'dir.",
-                            "source": node.source,
-                            "confidence": node.confidence,
-                            "evidence": node.evidence if hasattr(node, "evidence") else None,
+                            "question": question, "entity": node.ne,
+                            "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
+                            "source": node.source, "confidence": node.confidence,
                             "from_memory": True
                         }
                     # Diğer özellikler
@@ -1377,6 +1374,27 @@ class ASIKernel:
             "axioms_used": ["ax_su_islatir", "ax_renk_algi", "ax_mavi_renktir"],
             "verdict": "Islanmak ≠ Renklenmek. Su renksizdir, sadece ıslatır."
         }
+
+    def _tr_dır(self, word: str) -> str:
+        """Türkçe ünlü uyumuna göre 'dır/dir/tır/tir' ekle."""
+        word = word.strip().rstrip("'")
+        if not word:
+            return word
+        last = word[-1]
+        # Sert ünsüzlerden sonra t, yumuşaklardan sonra d gelir
+        sert = "pçtksşhf"
+        kok = "t" if last in sert else "d"
+        # Son ünlüye göre kalın (aıou) / ince (eiöü)
+        son_unlu = None
+        for c in reversed(word):
+            if c in "aeiıöüou":
+                son_unlu = c
+                break
+        if son_unlu is None:
+            return word + kok + "ır"
+        kalin = son_unlu in "aıou"
+        return word + kok + ("ır" if kalin else "ir")
+
 
     def _handle_sky_question(self, question: str) -> dict:
         return {
