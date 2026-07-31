@@ -24,6 +24,13 @@ import time
 import threading
 import os
 
+# ═══════════════════════════════════════════════════════════════════
+# GLOBAL AYAR: Yerel LLM (LM Studio) tamamen kapalı
+# True  → LLM çağrıları yapılır (damıtma, batch çözüm)
+# False → TÜM LLM çağrıları devre dışı — saf sembolik çalışma
+# ═══════════════════════════════════════════════════════════════════
+LLM_ENABLED = False
+
 
 # ═══════════════════════════════════════════════════════════════════
 # TEMEL VERİ YAPILARI (Aşama 1-2 ile aynı, genişletildi)
@@ -1690,6 +1697,8 @@ class LocalLLMDistiller:
 
     def _call_llm(self, user_prompt: str, temperature: float = 0.2) -> Optional[str]:
         """LM Studio / Ollama OpenAI uyumlu API'ye istek at"""
+        if not LLM_ENABLED:
+            return None  # Yerel LLM kapalı — saf sembolik mod
         payload = json.dumps({
             "model": self.model,
             "messages": [
@@ -2346,6 +2355,8 @@ class WebKnowledgeIngester:
 
     def _call_llm_raw(self, system_prompt: str, user_prompt: str,
                       temperature: float = 0.15, max_tokens: int = 2000) -> Optional[str]:
+        if not LLM_ENABLED:
+            return None  # Yerel LLM kapalı — saf sembolik mod
         payload = json.dumps({
             "model": self.model,
             "messages": [
@@ -3011,6 +3022,35 @@ class UnresolvedQueue:
         if not self.queue:
             return 0
 
+        # Yerel LLM kapalı → sembolik çözüm: yüksek güvenli kabul, düşük ret
+        if not LLM_ENABLED:
+            self.batch_count += 1
+            batch = self.queue[:self.batch_size]
+            self.queue = self.queue[self.batch_size:]
+            resolved = 0
+            for item in batch:
+                # Deterministik kural: "isa" ilişkileri güvenli kabul
+                if item.get("rel_type") == "isa" and item.get("target"):
+                    node = self.kernel.hooks.create_node(
+                        ne=item["concept"],
+                        properties={"isa": item["target"]},
+                        source="batch_sembolik (LLM kapalı)",
+                        confidence=0.6
+                    )
+                    resolved += 1
+                else:
+                    # Diğerleri izole et
+                    node = CrystalNode(
+                        id=self.kernel.hooks._next_id(), ne=item["concept"],
+                        properties={item.get("prop", "nitelik"): item.get("value", item.get("target", ""))},
+                        source="batch_sembolik REJECT (LLM kapalı)",
+                        isolated=True, confidence=0.3
+                    )
+                    self.kernel.hooks.nodes[node.id] = node
+                    self.kernel.contradictions.isolation_zone.append(node)
+            self.resolved_count += resolved
+            return resolved
+
         self.batch_count += 1
         batch = self.queue[:self.batch_size]
         self.queue = self.queue[self.batch_size:]  # Kalanları sakla
@@ -3251,8 +3291,8 @@ class StreamingIngestionPipeline:
         relations_data = self.ingester.extract_relations_rule_based(concept, web_data["text"])
         relations = relations_data.get("relations", [])
 
-        if not relations:
-            # Regex hiçbir şey bulamadı → LLM'e düş (nadir)
+        if not relations and LLM_ENABLED:
+            # Regex hiçbir şey bulamadı → LLM'e düş (sadece LLM açıksa)
             result["llm_called"] = True
             relations_data = self.ingester.extract_relations_from_text(
                 concept, web_data["text"], use_llm=True
