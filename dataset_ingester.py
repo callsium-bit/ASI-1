@@ -39,12 +39,12 @@ class DatasetIngester:
         r'(?:\'?dir|\'?dır|tir|tır)[\s.!]',
         re.I
     )
-    # "X'in Y'si Z'dir" → hasa ilişkisi
+    # "X'in Y'si Z'dir" → hasa ilişkisi (SADECE bilinen property'ler)
     GOLD_HASA = re.compile(
         r'^(?P<subject>[\w\sğüşıöçĞÜŞİÖÇ]{2,40}?)(?:nin|nın|in|ın|un|ün)\s+'
         r'(?P<prop>sıcaklığı|büyüklüğü|ağırlığı|hızı|yapısı|şekli|türü|cinsi|maddesi|rengi|'
         r'nüfusu|başkenti|merkezi|yüzölçümü|uzunluğu|yüksekliği|derinliği|'
-        r'[\wğüşıöç]{3,20}(?:i|ı|u|ü|si|sı|su|sü))\s+'
+        r'amacı|görevi|işlevi|nedeni|sonucu)\s+'
         r'(?P<value>[\w\sğüşıöçĞÜŞİÖÇ\-\d.,%°]{2,60}?)(?:\'?dir|\'?dır|\.|,|;)',
         re.I
     )

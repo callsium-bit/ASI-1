@@ -2514,7 +2514,7 @@ class WebKnowledgeIngester:
                 r'(?P<property>sıcaklığı|büyüklüğü|ağırlığı|hızı|yapısı|şekli|kalınlığı|'
                 r'türü|cinsi|çeşidi|maddesi|rengi|nedeni|sonucu|amacı|görevi|işlevi|'
                 r'merkezi|başkenti|nüfusu|yüzölçümü|uzunluğu|yüksekliği|derinliği|'
-                r'ortalama\s+[\wğüşıöç]+|[\wğüşıöç]{3,20}(?:i|ı|u|ü|si|sı|su|sü))\s+'
+                r'ortalama\s+[\wğüşıöç]+)\s+'
                 r'(?P<value>[\w\sğüşıöçĞÜŞİÖÇ\-\d.,%°]{2,70}?)(?:\'?dir|\'?dır|\.|,|;|\s+olarak)',
                 re.I
             ),
