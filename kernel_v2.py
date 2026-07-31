@@ -1199,10 +1199,20 @@ class ASIKernel:
             self.hooks.create_node(ne=ne, properties=props, source="tohum_veri")
 
     def save_knowledge(self, path: str = None) -> dict:
-        """Bilgi tabanını diske kaydet."""
+        """Bilgi tabanını diske kaydet. 10GB hafıza sınırı uygulanır."""
+        target = path or self._knowledge_path or KnowledgeStore.DEFAULT_PATH
+        # 10GB sınır kontrolü
+        if os.path.exists(target):
+            try:
+                size_mb = os.path.getsize(target) / (1024 * 1024)
+                if size_mb >= 10 * 1024:  # 10GB
+                    return {"error": "Hafıza 10GB sınırına ulaştı — yeni bilgi kaydedilmiyor",
+                            "size_mb": round(size_mb, 1), "limit_gb": 10}
+            except OSError:
+                pass
         return KnowledgeStore.save(
             self.hooks, self.contradictions.isolation_zone,
-            path or self._knowledge_path
+            target
         )
 
     def load_knowledge(self, path: str = None) -> dict:
