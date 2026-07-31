@@ -23,6 +23,7 @@ import html
 import time
 import threading
 import os
+import unicodedata
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBAL AYAR: Yerel LLM (LM Studio) tamamen kapalı
@@ -209,6 +210,10 @@ class AxiomEngine:
 
     @staticmethod
     def _normalize_tr(text: str) -> str:
+        # Önce Unicode NFKD: "İ" → "i" + combining dot gibi birleşik karakterleri ayrıştır
+        text = unicodedata.normalize('NFKD', text)
+        # Combining işaretleri at (i+dot → i)
+        text = ''.join(c for c in text if not unicodedata.combining(c))
         tr_map = str.maketrans("ğĞşŞıİüÜöÖçÇ", "gGsSiIuUoOcC")
         return text.translate(tr_map).lower()
 
@@ -1247,6 +1252,59 @@ class ASIKernel:
         for alg in ["ses", "koku"]:
             if norm(alg) in words and found_actions:
                 return self._handle_perception_action_question(question, alg)
+
+        # --- 🧠 ÖĞRENİLMİŞ HAFIZA SORGUSU: "X nedir?" ---
+        # Kristal düğümlerdeki isa bilgisiyle cevapla
+        is_what_question = any(norm(w) in {"nedir", "ne", "neymiş", "nedirler", "kimdir"} for w in words)
+        if is_what_question:
+            # 1. Önce TAM ifadeyle dene: "nedir"den önceki kısım
+            q_clean = question.lower().rstrip("?")
+            expr = re.sub(r'\s*(nedir|neymiş|nedirler|kimdir|de nedir|da nedir|ne)\s*$', '', q_clean).strip()
+            expr = re.sub(r'^(bana|söyle|anlat|soruyorum)\s+', '', expr)
+            if expr:
+                expr_nodes = self.hooks.get_hook_nodes(norm(expr))
+                for node in expr_nodes:
+                    if node.isolated:
+                        continue
+                    props = node.properties
+                    if "isa" in props:
+                        return {
+                            "question": question, "entity": node.ne,
+                            "answer": f"{node.ne}, {props['isa']}'dir.",
+                            "source": node.source, "confidence": node.confidence,
+                            "from_memory": True
+                        }
+
+            # 2. Kelime bazlı (tek kelimelik kavramlar)
+            for word in words:
+                if norm(word) in {"nedir", "ne", "neymiş", "kimdir", "mi", "mu", "mı", "mü", "?", ""}:
+                    continue
+                nodes = self.hooks.get_hook_nodes(norm(word))
+                for node in nodes:
+                    if node.isolated:
+                        continue
+                    props = node.properties
+                    if "isa" in props:
+                        return {
+                            "question": question,
+                            "entity": node.ne,
+                            "answer": f"{node.ne}, {props['isa']}'dir.",
+                            "source": node.source,
+                            "confidence": node.confidence,
+                            "evidence": node.evidence if hasattr(node, "evidence") else None,
+                            "from_memory": True
+                        }
+                    # Diğer özellikler
+                    if props and len(props) == 1 and not node.ne.endswith(("dir", "dır")):
+                        k = list(props.keys())[0]
+                        v = props[k]
+                        return {
+                            "question": question,
+                            "entity": node.ne,
+                            "answer": f"{node.ne}'nin {k}: {v}.",
+                            "source": node.source,
+                            "from_memory": True
+                        }
 
         # --- Genel varlık sorgusu ---
         for word in words:
