@@ -1953,13 +1953,14 @@ class LocalLLMDistiller:
                 return {"accepted": False, "reason": conflicts[0]["reason"]}
 
             if not dry_run:
-                node = self.kernel.hooks.create_node(
-                    ne=concept,
-                    properties={"isa": target},
-                    source=f"llm_distiller (confidence: {relation.get('confidence', '?')})"
+                # ✅ gate üzerinden geç (dedup + contradiction)
+                gate_result = self.kernel.contradictions.gate(
+                    ne=concept, properties={"isa": target},
+                    source=f"llm_distiller (confidence: {relation.get('confidence', '?')})",
+                    confidence=float(relation.get("confidence", 0.8))
                 )
                 self.stats["nodes_created"] += 1
-                return {"accepted": True, "node_id": node.id}
+                return {"accepted": True, "node_id": gate_result["node_id"]}
 
             return {"accepted": True, "node_id": "dry_run"}
 
@@ -1992,14 +1993,14 @@ class LocalLLMDistiller:
                 return {"accepted": False, "reason": eval_result["reason"]}
 
             if not dry_run:
-                node = self.kernel.hooks.create_node(
-                    ne=concept,
-                    properties={prop: value},
+                # ✅ gate üzerinden geç (dedup + contradiction)
+                gate_result = self.kernel.contradictions.gate(
+                    ne=concept, properties={prop: value},
                     source=f"llm_distiller (confidence: {relation.get('confidence', '?')})",
                     confidence=float(relation.get("confidence", 0.8))
                 )
                 self.stats["nodes_created"] += 1
-                return {"accepted": True, "node_id": node.id}
+                return {"accepted": True, "node_id": gate_result["node_id"]}
 
             return {"accepted": True, "node_id": "dry_run"}
 
@@ -2021,13 +2022,15 @@ class LocalLLMDistiller:
 
             # "yapamaz" ilişkisini hasa olarak kaydet: X hasa yapamadigi_eylem:action
             if not dry_run:
-                node = self.kernel.hooks.create_node(
+                # ✅ gate üzerinden geç
+                gate_result = self.kernel.contradictions.gate(
                     ne=concept,
                     properties={"yapamadigi_eylem": action, "yapamama_nedeni": reason},
-                    source=f"llm_distiller (confidence: {relation.get('confidence', '?')})"
+                    source=f"llm_distiller (confidence: {relation.get('confidence', '?')})",
+                    confidence=float(relation.get("confidence", 0.8))
                 )
                 self.stats["nodes_created"] += 1
-                return {"accepted": True, "node_id": node.id}
+                return {"accepted": True, "node_id": gate_result["node_id"]}
 
             return {"accepted": True, "node_id": "dry_run"}
 
@@ -2198,7 +2201,7 @@ class WebKnowledgeIngester:
         self._loop_active = False
         self._cache: Dict[str, dict] = {}          # Wikipedia yanıt önbelleği
         self._last_request_time: float = 0.0        # Rate-limit için
-        self._min_request_interval: float = 1.5     # İstekler arası min süre (sn)
+        self._min_request_interval: float = 3.0     # İstekler arası min süre (sn)
 
     # ── Wikipedia API ──────────────────────────────────────────
 

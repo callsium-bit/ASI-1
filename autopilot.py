@@ -210,6 +210,40 @@ def run_cycle():
         f"New: {stats['new_knowledge']}")
     log(f"   LLM Dependency: {stats['llm_dependency_ratio']:.1%}")
 
+    # 5. 💾 KALICI HAFIZA: bilgi tabanını diske kaydet
+    try:
+        save_result = kernel.save_knowledge()
+        saved = save_result.get("saved_nodes", save_result.get("nodes", 0))
+        log(f"💾 Kalıcı hafıza kaydedildi: {saved} düğüm → knowledge_store.json")
+        report["saved"] = True
+    except Exception as e:
+        log(f"⚠️ Kaydetme hatası: {e}")
+        report["saved"] = False
+        report["save_error"] = str(e)
+
+    # 6. 🗂️ Masaüstü veri setlerini de işle (5N1K 59K vb.)
+    try:
+        from dataset_ingester import DatasetIngester
+        dataset = DatasetIngester(kernel)
+        ds_result = dataset.ingest_jsonl(
+            os.path.join(os.path.expanduser("~"), "Desktop", "5n1k_temiz_59k.jsonl"),
+            limit=2000  # Her döngüde 2000 satır — kademeli öğrenme
+        )
+        log(f"🗂️ Dataset: +{ds_result.get('accepted', 0)} kabul, "
+            f"{ds_result.get('duplicates', 0)} tekrar, "
+            f"{ds_result.get('rate_per_sec', 0)} satır/sn")
+        stats["dataset_accepted"] = ds_result.get("accepted", 0)
+        stats["dataset_duplicates"] = ds_result.get("duplicates", 0)
+        report["dataset"] = ds_result
+
+        # Dataset sonrası tekrar kaydet
+        if ds_result.get("accepted", 0) > 0:
+            kernel.save_knowledge()
+            log("💾 Dataset sonrası tekrar kaydedildi")
+    except Exception as e:
+        log(f"⚠️ Dataset işleme hatası: {e}")
+        report["dataset_error"] = str(e)
+
     return report
 
 if __name__ == "__main__":
