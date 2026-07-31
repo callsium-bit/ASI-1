@@ -3276,13 +3276,27 @@ class UnresolvedQueue:
             for item in batch:
                 # Deterministik kural: "isa" ilişkileri güvenli kabul
                 if item.get("rel_type") == "isa" and item.get("target"):
-                    node = self.kernel.hooks.create_node(
+                    # ✅ DÜZELTME: gate üzerinden geç (bypass yasak — contradiction + dedup)
+                    gate_result = self.kernel.contradictions.gate(
                         ne=item["concept"],
                         properties={"isa": item["target"]},
                         source="batch_sembolik (LLM kapalı)",
-                        confidence=0.6
+                        confidence=0.6,
+                        rel_type="isa"
                     )
-                    resolved += 1
+                    if gate_result["accepted"]:
+                        resolved += 1
+                    else:
+                        # Gate reddetti (contradiction) → izole et
+                        node = CrystalNode(
+                            id=self.kernel.hooks._next_id(), ne=item["concept"],
+                            properties={"isa": item["target"]},
+                            source="batch_sembolik GATE-REJECT (LLM kapalı)",
+                            isolated=True, confidence=0.3,
+                            status="isolated"
+                        )
+                        self.kernel.hooks.nodes[node.id] = node
+                        self.kernel.contradictions.isolation_zone.append(node)
                 else:
                     # Diğerleri izole et
                     node = CrystalNode(

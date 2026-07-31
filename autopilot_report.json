@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-07-30T03:29:40.460756",
+  "timestamp": "2026-08-01T01:35:31.480028",
   "initial_state": {
     "total_axioms": 20,
-    "total_nodes": 7,
-    "total_hooks": 27,
-    "isolated_nodes": 0,
+    "total_nodes": 799,
+    "total_hooks": 1864,
+    "isolated_nodes": 169,
     "entity_types": {
       "madde": "fiziksel",
       "yercekimi_etkisinde": "soyut",
@@ -29,10 +29,10 @@
       "gokyuzu": "soyut",
       "gorunur_renk": "soyut",
       "yukarida": "soyut",
-      "gunes": "soyut",
-      "sicak": "soyut",
+      "gunes": "fiziksel",
+      "sicak": "algisal",
       "gece": "soyut",
-      "karanlik": "soyut",
+      "karanlik": "algisal",
       "ses": "algisal",
       "koku": "algisal"
     },
@@ -42,26 +42,43 @@
     {
       "concept": "yagmur",
       "source": "Yağmur",
-      "relations": 3,
+      "relations": 1,
       "accepted": 0,
-      "rejected": 0
+      "rejected": 0,
+      "unresolved": 1,
+      "duplicates": 0
     },
     {
       "concept": "su",
       "source": "Su",
-      "relations": 3,
+      "relations": 1,
       "accepted": 0,
-      "rejected": 0
+      "rejected": 0,
+      "unresolved": 1,
+      "duplicates": 0
     }
   ],
   "errors": [
     "gokyuzu: Wikipedia'da bulunamadı"
   ],
+  "stats": {
+    "total_items": 2,
+    "accepted_by_fast_path": 0,
+    "rejected_by_fast_path": 0,
+    "unresolved": 2,
+    "llm_calls": 1,
+    "duplicate_items": 0,
+    "new_knowledge": 2,
+    "contradictions": 0,
+    "llm_dependency_ratio": 1.0,
+    "dataset_accepted": 0,
+    "dataset_duplicates": 117
+  },
   "final_state": {
     "total_axioms": 20,
-    "total_nodes": 7,
-    "total_hooks": 27,
-    "isolated_nodes": 0,
+    "total_nodes": 827,
+    "total_hooks": 1864,
+    "isolated_nodes": 197,
     "entity_types": {
       "madde": "fiziksel",
       "yercekimi_etkisinde": "soyut",
@@ -86,13 +103,32 @@
       "gokyuzu": "soyut",
       "gorunur_renk": "soyut",
       "yukarida": "soyut",
-      "gunes": "soyut",
-      "sicak": "soyut",
+      "gunes": "fiziksel",
+      "sicak": "algisal",
       "gece": "soyut",
-      "karanlik": "soyut",
+      "karanlik": "algisal",
       "ses": "algisal",
       "koku": "algisal"
     },
     "conversation_turns": 0
-  }
+  },
+  "saved": true,
+  "dataset": {
+    "lines_read": 2000,
+    "isa_extracted": 145,
+    "hasa_extracted": 0,
+    "accepted": 0,
+    "rejected": 28,
+    "unresolved": 0,
+    "duplicates": 117,
+    "skipped": 0,
+    "elapsed_sec": 0.54,
+    "rate_per_sec": 3728.8
+  },
+  "self_test": {
+    "passed": true,
+    "exit_code": 0,
+    "tail": "S: mavi -> renk -> algisal_ozellik zinciri calismali\n  PASS: 'mavi' algisal olmali\n  PASS: 'su' fiziksel olmali\n  PASS: Turkce normalize calismali\n\n============================================================\n  TUM TESTLER BASARILI: 40/40\n============================================================\n"
+  },
+  "saved_final": true
 }
