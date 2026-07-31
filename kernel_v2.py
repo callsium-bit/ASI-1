@@ -1168,6 +1168,9 @@ class ASIKernel:
         self.conversation_log: List[dict] = []
         self._knowledge_path = knowledge_path
 
+        # Web ingestion köprüsü (hibrit döngü için)
+        self.web_ingester = WebKnowledgeIngester(self)
+
         # Kalıcı hafıza: varsa yükle, yoksa tohum veri ile başla
         loaded = False
         if auto_load and KnowledgeStore.exists(knowledge_path):
@@ -1670,28 +1673,42 @@ class ASIKernel:
         while max_iterations == 0 or iteration < max_iterations:
             from kernel_v2 import LocalLLMDistiller
             distiller = LocalLLMDistiller(self)
+
+            # ── HİBRİT SEÇİM: %70 yeni kavram + %30 derinleştirme ──
             gaps = distiller.detect_gaps(limit=20)
-            
-            if not gaps:
-                print("\n   ✅ Tüm boşluklar dolduruldu!")
+            new_concepts = self.web_ingester.suggest_new_concepts(count=7) if hasattr(self, "web_ingester") else []
+
+            if not gaps and not new_concepts:
+                print("\n   ✅ Tüm boşluklar dolduruldu, yeni kavram önerisi yok!")
                 break
-                
+
+            # Seçim listesi: önce yeni kavramlar (yeni bilgi), sonra gap'ler (derinleştirme)
+            selected = []
+            for nc in new_concepts[:5]:  # %70: yeni keşif
+                if nc not in summary["concepts_processed"]:
+                    selected.append({"type": "new_concept", "concept": nc})
+            for gap in gaps[:5]:  # %30: derinleştirme
+                if gap["concept"] not in summary["concepts_processed"]:
+                    selected.append({"type": gap["type"], "concept": gap["concept"]})
+            if not selected:
+                summary["stopped_by"] = "no_progress"
+                break
+
             iteration += 1
             print(f"\n{'='*50}")
-            print(f"🔄 Tur #{iteration}: {len(gaps)} boşluk")
+            print(f"🔄 Tur #{iteration}: {len(selected)} kavram "
+                  f"({len([s for s in selected if s['type']=='new_concept'])} yeni + "
+                  f"{len([s for s in selected if s['type']!='new_concept'])} derinleştirme)")
             print(f"{'='*50}")
-            
+
             processed = 0
-            for gap in gaps:
-                concept = gap["concept"]
-                if concept in summary["concepts_processed"]:
-                    continue
-                    
-                print(f"\n   🎯 [{gap['type']}] {concept}")
-                
+            for item in selected:
+                concept = item["concept"]
+                print(f"\n   🎯 [{item['type']}] {concept}")
+
                 # Streaming pipeline: regex → FastPath → Queue → Batch
                 r = pipeline.process_web_concept(concept, strategy)
-                
+
                 summary["concepts_processed"].append(concept)
                 summary["total_accepted"] += r["fast_accepted"]
                 summary["total_rejected"] += r["fast_rejected"]
@@ -2250,6 +2267,91 @@ class WebKnowledgeIngester:
 
     Kesintisiz döngü: Yeni kancalar bulundukça devam eder.
     """
+
+    def suggest_new_concepts(self, count: int = 5) -> List[str]:
+        """
+        Yeni kavram önerileri — önce yerel veri setlerinden (tanım cümleli),
+        bulunamazsa Wikipedia rastgele sayfa API'sinden.
+        Hafızada zaten olanlar elenir.
+        """
+        if count <= 0:
+            return []
+
+        norm = AxiomEngine._normalize_tr
+        known = {norm(n.ne) for n in self.kernel.hooks.nodes.values()}
+        new_concepts = []
+
+        # ── Kaynak 1: Yerel veri setleri (kaliteli tanım cümleleri) ──
+        try:
+            import json as _json
+            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            candidates = []
+            for ds_path in [
+                os.path.join(desktop, "projelerim", "data", "archive", "synthetic_data.jsonl"),
+                os.path.join(desktop, "5n1k_temiz_59k.jsonl"),
+            ]:
+                if os.path.exists(ds_path):
+                    with open(ds_path, 'r', encoding='utf-8') as f:
+                        for line in f:
+                            try:
+                                rec = _json.loads(line)
+                                konu = rec.get("konu", "").strip()
+                                if konu and len(konu) <= 40 and konu not in candidates:
+                                    candidates.append(konu)
+                            except _json.JSONDecodeError:
+                                continue
+                            if len(candidates) > 500:
+                                break
+                if len(new_concepts) >= count:
+                    break
+            for konu in candidates:
+                t_norm = norm(konu)
+                if t_norm in known:
+                    continue
+                if "," in konu or "(" in konu:
+                    continue
+                new_concepts.append(konu)
+                if len(new_concepts) >= count:
+                    return new_concepts
+        except Exception:
+            pass
+
+        # ── Kaynak 2: Wikipedia rastgele (fallback) ──
+        try:
+            self._rate_limit_wait()
+            url = (
+                "https://tr.wikipedia.org/w/api.php"
+                f"?action=query&list=random&rnnamespace=0&rnlimit={count * 3}"
+                "&format=json"
+            )
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "ASI-1/0.1 (educational research bot; contact: asi1@example.com)"
+            })
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            self._last_request_time = time.time()
+        except Exception as e:
+            self.stats["wiki_errors"] = self.stats.get("wiki_errors", 0) + 1
+            return new_concepts
+
+        for item in data.get("query", {}).get("random", []):
+            title = item.get("title", "").strip()
+            if not title or len(title) > 40:
+                continue
+            low = title.lower()
+            if "(anlam" in low or "(değiştir)" in low:
+                continue
+            if "," in title or "(" in title or ")" in title:
+                continue
+            if any(s in low for s in ("sendikası", "derneği", "belediyesi", "ilçesi", "köyü")):
+                continue
+            t_norm = norm(title)
+            if t_norm in known:
+                continue
+            new_concepts.append(title)
+            if len(new_concepts) >= count:
+                break
+        return new_concepts
 
     EXTRACT_PROMPT = (
         "Sen bir bilgi çıkarım asistanısın. Görevin: Verilen metindeki "
