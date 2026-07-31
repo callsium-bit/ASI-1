@@ -82,11 +82,14 @@ class DatasetIngester:
             parts = [p.strip() for p in text.split(',')]
             if len(parts) >= 2:
                 last_part = parts[-1]
-                # "Y'dir/dır/lardır" ekini temizle
+                # "Y'dir" ekini temizle — TÜM Türkçe varyantları
                 m = re.match(
-                    r'^([\w\sğüşıöçĞÜŞİÖÇ\-]{2,50}?)(?:\'?dir|\'?dır|tir|tır|'
-                    r'lerdir|lardır|leridir|larıdır|dur|dür|tur|tür|'
-                    r'ler|lar)(?:\.|,|;)?$',
+                    r'^([\w\sğüşıöçĞÜŞİÖÇ\-]{2,50}?)(?:'
+                    r'leridir|larıdır|lerdir|lardır|leridir|larıdır|'
+                    r'sidir|sıdır|sidir|sıdır|sudur|südür|'
+                    r'idir|ıdır|udur|üdür|tir|tır|tur|tür|'
+                    r'\'?dir|\'?dır|dur|dür|dir|dır|'
+                    r'ler|lar|si|sı|su|sü)(?:\.|,|;)?$',
                     last_part, re.I
                 )
                 if m:
@@ -150,8 +153,12 @@ class DatasetIngester:
                 text = None
                 subject_hint = ""
                 if field == "ne" and "5n1k" in record:
-                    text = record["5n1k"].get("ne", "")
+                    five = record["5n1k"]
+                    text = five.get("ne", "")
                     subject_hint = record.get("konu", "")
+                    # NOT: 5N1K'nın nerede/zaman/neden alanları çok varyasyonlu —
+                    # aynı subject için farklı değerler çelişki yaratıyor.
+                    # Sadece "isa" (kesin tanım) kullanılır.
                 elif "messages" in record:
                     # Chat formatı: son assistant cevabı
                     for msg in record["messages"]:

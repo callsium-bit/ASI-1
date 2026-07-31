@@ -1,10 +1,10 @@
 {
   "version": 2,
-  "saved_at": "2026-08-01T00:08:11.818347",
-  "node_counter": 15,
+  "saved_at": "2026-08-01T00:17:27.476120",
+  "node_counter": 9986,
   "nodes": [
     {
-      "id": "cn_0001",
+      "id": "cn_9971",
       "ne": "gokyuzu",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -15,14 +15,14 @@
         "gorunur_renk": "mavi"
       },
       "hooks": [
-        "gokyuzu",
         "mavi",
-        "gokyuzu.gorunur_renk"
+        "gokyuzu.gorunur_renk",
+        "gokyuzu"
       ],
       "confidence": 1.0,
       "isolated": false,
       "source": "tohum_veri",
-      "created_at": "2026-08-01T00:07:43.279412",
+      "created_at": "2026-08-01T00:17:22.053488",
       "verification_count": 1,
       "contradiction_count": 0,
       "evidence": [
@@ -31,7 +31,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0002",
+      "id": "cn_9972",
       "ne": "yagmur",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -44,15 +44,15 @@
       },
       "hooks": [
         "yagmur",
-        "su",
-        "yagmur.tip",
         "yagis",
-        "yagmur.madde"
+        "yagmur.tip",
+        "yagmur.madde",
+        "su"
       ],
       "confidence": 1.0,
       "isolated": false,
       "source": "tohum_veri",
-      "created_at": "2026-08-01T00:07:43.279412",
+      "created_at": "2026-08-01T00:17:22.053488",
       "verification_count": 1,
       "contradiction_count": 0,
       "evidence": [
@@ -61,7 +61,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0003",
+      "id": "cn_9973",
       "ne": "su",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -74,15 +74,15 @@
       },
       "hooks": [
         "su.hal",
-        "su",
         "su.renk",
-        "seffaf",
-        "sivi"
+        "sivi",
+        "su",
+        "seffaf"
       ],
       "confidence": 1.0,
       "isolated": false,
       "source": "tohum_veri",
-      "created_at": "2026-08-01T00:07:43.279412",
+      "created_at": "2026-08-01T00:17:22.053488",
       "verification_count": 1,
       "contradiction_count": 0,
       "evidence": [
@@ -91,7 +91,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0004",
+      "id": "cn_9974",
       "ne": "kar",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -103,16 +103,16 @@
         "madde": "su"
       },
       "hooks": [
-        "kati",
-        "su",
         "kar",
+        "kati",
+        "kar.hal",
         "kar.madde",
-        "kar.hal"
+        "su"
       ],
       "confidence": 1.0,
       "isolated": false,
       "source": "tohum_veri",
-      "created_at": "2026-08-01T00:07:43.279412",
+      "created_at": "2026-08-01T00:17:22.053488",
       "verification_count": 1,
       "contradiction_count": 0,
       "evidence": [
@@ -121,7 +121,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0005",
+      "id": "cn_9975",
       "ne": "gunes",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -134,15 +134,15 @@
       },
       "hooks": [
         "yuksek",
-        "sari",
         "gunes",
         "gunes.renk",
+        "sari",
         "gunes.sicaklik"
       ],
       "confidence": 1.0,
       "isolated": false,
       "source": "tohum_veri",
-      "created_at": "2026-08-01T00:07:43.279412",
+      "created_at": "2026-08-01T00:17:22.053488",
       "verification_count": 1,
       "contradiction_count": 0,
       "evidence": [
@@ -151,7 +151,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0006",
+      "id": "cn_9976",
       "ne": "gece",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -162,14 +162,14 @@
         "aydinlik": "karanlik"
       },
       "hooks": [
-        "karanlik",
+        "gece.aydinlik",
         "gece",
-        "gece.aydinlik"
+        "karanlik"
       ],
       "confidence": 1.0,
       "isolated": false,
       "source": "tohum_veri",
-      "created_at": "2026-08-01T00:07:43.279412",
+      "created_at": "2026-08-01T00:17:22.053488",
       "verification_count": 1,
       "contradiction_count": 0,
       "evidence": [
@@ -178,7 +178,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0007",
+      "id": "cn_9977",
       "ne": "deniz",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -190,16 +190,16 @@
         "madde": "su"
       },
       "hooks": [
-        "su",
-        "deniz.gorunur_renk",
         "deniz",
         "mavi",
-        "deniz.madde"
+        "deniz.gorunur_renk",
+        "deniz.madde",
+        "su"
       ],
       "confidence": 1.0,
       "isolated": false,
       "source": "tohum_veri",
-      "created_at": "2026-08-01T00:07:43.279412",
+      "created_at": "2026-08-01T00:17:22.053488",
       "verification_count": 1,
       "contradiction_count": 0,
       "evidence": [
@@ -208,7 +208,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0008",
+      "id": "cn_9978",
       "ne": "Yazının İcadı",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -216,17 +216,17 @@
       "neden": "",
       "kim": "",
       "properties": {
-        "isa": "bilgiyi kaydetme yöntemi"
+        "isa": "bilgiyi kaydetme yöntem"
       },
       "hooks": [
-        "bilgiyi kaydetme yontemi",
-        "yazinin icadi.isa",
-        "yazinin icadi"
+        "bilgiyi kaydetme yontem",
+        "yazinin icadi",
+        "yazinin icadi.isa"
       ],
       "confidence": 0.99,
       "isolated": false,
       "source": "dataset|isa",
-      "created_at": "2026-08-01T00:07:43.281412",
+      "created_at": "2026-08-01T00:17:22.055488",
       "verification_count": 984,
       "contradiction_count": 0,
       "evidence": [
@@ -235,7 +235,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0009",
+      "id": "cn_9979",
       "ne": "Rönesans Dönemi",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -243,17 +243,17 @@
       "neden": "",
       "kim": "",
       "properties": {
-        "isa": "bilim ve düşüncede yaşanan büyük canlanma hareketi"
+        "isa": "bilim ve düşüncede yaşanan büyük canlanma hareket"
       },
       "hooks": [
-        "ronesans donemi",
-        "bilim ve dusuncede yasanan buyuk canlanma hareketi",
-        "ronesans donemi.isa"
+        "bilim ve dusuncede yasanan buyuk canlanma hareket",
+        "ronesans donemi.isa",
+        "ronesans donemi"
       ],
       "confidence": 0.99,
       "isolated": false,
       "source": "dataset|isa",
-      "created_at": "2026-08-01T00:07:43.281412",
+      "created_at": "2026-08-01T00:17:22.056490",
       "verification_count": 984,
       "contradiction_count": 0,
       "evidence": [
@@ -262,25 +262,25 @@
       "status": "active"
     },
     {
-      "id": "cn_0010",
-      "ne": "Karadelikler",
+      "id": "cn_9980",
+      "ne": "Empresyonizm Akımı",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
       "nasil": "",
       "neden": "",
       "kim": "",
       "properties": {
-        "isa": "çökmüş bir yıldızın kalıntısı olan uzay bölgesi"
+        "isa": "belirgin fırça darbeleriyle karakterize resim akım"
       },
       "hooks": [
-        "cokmus bir yildizin kalintisi olan uzay bolgesi",
-        "karadelikler",
-        "karadelikler.isa"
+        "empresyonizm akimi",
+        "empresyonizm akimi.isa",
+        "belirgin firca darbeleriyle karakterize resim akim"
       ],
       "confidence": 0.99,
       "isolated": false,
       "source": "dataset|isa",
-      "created_at": "2026-08-01T00:07:43.282412",
+      "created_at": "2026-08-01T00:17:22.056490",
       "verification_count": 983,
       "contradiction_count": 0,
       "evidence": [
@@ -289,7 +289,34 @@
       "status": "active"
     },
     {
-      "id": "cn_0011",
+      "id": "cn_9981",
+      "ne": "Karadelikler",
+      "nerede": "evrensel",
+      "ne_zaman": "her_zaman",
+      "nasil": "",
+      "neden": "",
+      "kim": "",
+      "properties": {
+        "isa": "çökmüş bir yıldızın kalıntısı olan uzay bölge"
+      },
+      "hooks": [
+        "karadelikler.isa",
+        "cokmus bir yildizin kalintisi olan uzay bolge",
+        "karadelikler"
+      ],
+      "confidence": 0.99,
+      "isolated": false,
+      "source": "dataset|isa",
+      "created_at": "2026-08-01T00:17:22.057727",
+      "verification_count": 983,
+      "contradiction_count": 0,
+      "evidence": [
+        "dataset|isa"
+      ],
+      "status": "active"
+    },
+    {
+      "id": "cn_9982",
       "ne": "II. Dünya Savaşı",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -300,14 +327,14 @@
         "isa": "70 milyondan fazla insanın öldüğü küresel savaş"
       },
       "hooks": [
-        "70 milyondan fazla insanin oldugu kuresel savas",
         "ii. dunya savasi.isa",
-        "ii. dunya savasi"
+        "ii. dunya savasi",
+        "70 milyondan fazla insanin oldugu kuresel savas"
       ],
       "confidence": 0.99,
       "isolated": false,
       "source": "dataset|isa",
-      "created_at": "2026-08-01T00:07:43.282412",
+      "created_at": "2026-08-01T00:17:22.058488",
       "verification_count": 984,
       "contradiction_count": 0,
       "evidence": [
@@ -316,7 +343,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0012",
+      "id": "cn_9983",
       "ne": "Levha Sınırları ve Depremler",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -334,7 +361,7 @@
       "confidence": 0.99,
       "isolated": false,
       "source": "dataset|isa",
-      "created_at": "2026-08-01T00:07:43.283412",
+      "created_at": "2026-08-01T00:17:22.059489",
       "verification_count": 983,
       "contradiction_count": 0,
       "evidence": [
@@ -343,7 +370,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0013",
+      "id": "cn_9984",
       "ne": "Muson İklimi",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -351,17 +378,17 @@
       "neden": "",
       "kim": "",
       "properties": {
-        "isa": "yazları bol yağışlı tropikal iklim tipi"
+        "isa": "yazları bol yağışlı tropikal iklim tip"
       },
       "hooks": [
-        "yazlari bol yagisli tropikal iklim tipi",
-        "muson iklimi",
-        "muson iklimi.isa"
+        "yazlari bol yagisli tropikal iklim tip",
+        "muson iklimi.isa",
+        "muson iklimi"
       ],
       "confidence": 0.99,
       "isolated": false,
       "source": "dataset|isa",
-      "created_at": "2026-08-01T00:07:43.284411",
+      "created_at": "2026-08-01T00:17:22.060489",
       "verification_count": 983,
       "contradiction_count": 0,
       "evidence": [
@@ -370,7 +397,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0014",
+      "id": "cn_9985",
       "ne": "Arz ve Talep Yasası",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -378,17 +405,17 @@
       "neden": "",
       "kim": "",
       "properties": {
-        "isa": "arz arttıkça fiyatın düştüğü temel ekonomi ilkesi"
+        "isa": "arz arttıkça fiyatın düştüğü temel ekonomi ilke"
       },
       "hooks": [
         "arz ve talep yasasi.isa",
-        "arz arttikca fiyatin dustugu temel ekonomi ilkesi",
+        "arz arttikca fiyatin dustugu temel ekonomi ilke",
         "arz ve talep yasasi"
       ],
       "confidence": 0.99,
       "isolated": false,
       "source": "dataset|isa",
-      "created_at": "2026-08-01T00:07:43.288411",
+      "created_at": "2026-08-01T00:17:22.066488",
       "verification_count": 983,
       "contradiction_count": 0,
       "evidence": [
@@ -397,7 +424,7 @@
       "status": "active"
     },
     {
-      "id": "cn_0015",
+      "id": "cn_9986",
       "ne": "Vitamin Eksiklikleri",
       "nerede": "evrensel",
       "ne_zaman": "her_zaman",
@@ -409,13 +436,13 @@
       },
       "hooks": [
         "cesitli hastaliklara yol acan durum",
-        "vitamin eksiklikleri",
-        "vitamin eksiklikleri.isa"
+        "vitamin eksiklikleri.isa",
+        "vitamin eksiklikleri"
       ],
       "confidence": 0.99,
       "isolated": false,
       "source": "dataset|isa",
-      "created_at": "2026-08-01T00:07:43.297426",
+      "created_at": "2026-08-01T00:17:22.079486",
       "verification_count": 983,
       "contradiction_count": 0,
       "evidence": [
