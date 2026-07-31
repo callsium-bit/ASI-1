@@ -1753,6 +1753,29 @@ class ASIKernel:
                 if gap["concept"] not in summary["concepts_processed"]:
                     selected.append({"type": gap["type"], "concept": gap["concept"]})
             if not selected:
+                # ── NO_PROGRESS: durma, Wikipedia rastgele kavramlarla devam et ──
+                # (suggest_new_concepts veri setinden bulamazsa Wikipedia'ya düşer)
+                more = self.web_ingester.suggest_new_concepts(count=8) if hasattr(self, "web_ingester") else []
+                for nc in more:
+                    if nc not in summary["concepts_processed"]:
+                        selected.append({"type": "new_concept", "concept": nc})
+            if not selected:
+                # Gerçekten hiçbir kaynak yoksa: Wikipedia fallback'i zorla
+                try:
+                    import urllib.request
+                    url = ("https://tr.wikipedia.org/w/api.php"
+                           "?action=query&list=random&rnnamespace=0&rnlimit=10&format=json")
+                    req = urllib.request.Request(url, headers={
+                        "User-Agent": "ASI-1/0.1 (educational research bot; contact: asi1@example.com)"})
+                    with urllib.request.urlopen(req, timeout=15) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
+                    for item in data.get("query", {}).get("random", []):
+                        t = item.get("title", "").strip()
+                        if t and t not in summary["concepts_processed"] and len(t) <= 40:
+                            selected.append({"type": "new_concept", "concept": t})
+                except Exception:
+                    pass
+            if not selected:
                 summary["stopped_by"] = "no_progress"
                 break
 
@@ -2346,6 +2369,7 @@ class WebKnowledgeIngester:
         # ── Kaynak 1: Yerel veri setleri (kaliteli tanım cümleleri) ──
         try:
             import json as _json
+            import random as _random
             desktop = os.path.join(os.path.expanduser("~"), "Desktop")
             candidates = []
             for ds_path in [
@@ -2353,17 +2377,20 @@ class WebKnowledgeIngester:
                 os.path.join(desktop, "5n1k_temiz_59k.jsonl"),
             ]:
                 if os.path.exists(ds_path):
+                    # Rastgele başlangıç: her çağrıda farklı konular
                     with open(ds_path, 'r', encoding='utf-8') as f:
-                        for line in f:
-                            try:
-                                rec = _json.loads(line)
-                                konu = rec.get("konu", "").strip()
-                                if konu and len(konu) <= 40 and konu not in candidates:
-                                    candidates.append(konu)
-                            except _json.JSONDecodeError:
-                                continue
-                            if len(candidates) > 500:
-                                break
+                        all_lines = f.readlines()
+                    _random.shuffle(all_lines)
+                    for line in all_lines[:300]:
+                        try:
+                            rec = _json.loads(line)
+                            konu = rec.get("konu", "").strip()
+                            if konu and len(konu) <= 40 and konu not in candidates:
+                                candidates.append(konu)
+                        except _json.JSONDecodeError:
+                            continue
+                        if len(candidates) > 300:
+                            break
                 if len(new_concepts) >= count:
                     break
             for konu in candidates:
