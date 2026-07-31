@@ -2513,8 +2513,7 @@ class WebKnowledgeIngester:
                 r'(?:nin|nın|in|ın|un|ün)\s+'
                 r'(?P<property>sıcaklığı|büyüklüğü|ağırlığı|hızı|yapısı|şekli|kalınlığı|'
                 r'türü|cinsi|çeşidi|maddesi|rengi|nedeni|sonucu|amacı|görevi|işlevi|'
-                r'merkezi|başkenti|nüfusu|yüzölçümü|uzunluğu|yüksekliği|derinliği|'
-                r'ortalama\s+[\wğüşıöç]+)\s+'
+                r'başkenti|nüfusu|yüzölçümü|uzunluğu|yüksekliği|derinliği)\s+'
                 r'(?P<value>[\w\sğüşıöçĞÜŞİÖÇ\-\d.,%°]{2,70}?)(?:\'?dir|\'?dır|\.|,|;|\s+olarak)',
                 re.I
             ),
