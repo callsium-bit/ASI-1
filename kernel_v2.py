@@ -3286,17 +3286,7 @@ class UnresolvedQueue:
                     )
                     if gate_result["accepted"]:
                         resolved += 1
-                    else:
-                        # Gate reddetti (contradiction) → izole et
-                        node = CrystalNode(
-                            id=self.kernel.hooks._next_id(), ne=item["concept"],
-                            properties={"isa": item["target"]},
-                            source="batch_sembolik GATE-REJECT (LLM kapalı)",
-                            isolated=True, confidence=0.3,
-                            status="isolated"
-                        )
-                        self.kernel.hooks.nodes[node.id] = node
-                        self.kernel.contradictions.isolation_zone.append(node)
+                    # Gate reddettiyse düğümü zaten izole etti — ekstra yazım yok
                 else:
                     # Diğerleri izole et
                     node = CrystalNode(
