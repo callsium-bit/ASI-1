@@ -1171,6 +1171,9 @@ class ASIKernel:
         # Web ingestion köprüsü (hibrit döngü için)
         self.web_ingester = WebKnowledgeIngester(self)
 
+        # Aşama 9: Araç kütüphanesi (fonksiyon çağırma)
+        self.tools = ToolRegistry(self)
+
         # Kalıcı hafıza: varsa yükle, yoksa tohum veri ile başla
         loaded = False
         if auto_load and KnowledgeStore.exists(knowledge_path):
@@ -1220,7 +1223,56 @@ class ASIKernel:
         words.discard('')
 
         query_result = self.hooks.query(question)
+
+        # ── Aşama 9a: Zaman/Hesap soruları ÖNCELİKLİ araç (aksiyomla karışmasın) ──
+        tool_result = None
+        norm_words = words
+        zaman_tetik = {"saat", "tarih", "bugün", "zaman", "dakika"}
+        hesap_tetik = {"kaç", "eder", "çarp", "böl", "topla", "çıkar", "kare", "küp", "hesapla"}
+        if zaman_tetik & norm_words and not any(w.isdigit() for w in norm_words):
+            tool_result = self.tools.call(question)
+            if tool_result.get("tool") != "zaman_sor":
+                tool_result = None
+        elif hesap_tetik & norm_words and any(w.isdigit() for w in norm_words):
+            tool_result = self.tools.call(question)
+            if tool_result.get("tool") != "hesap_yap":
+                tool_result = None
+
         response = self._reason_about_question(question, words, query_result)
+
+        # ── Aşama 9b: Sembolik mantık çözemediyse veya öncelikli araç varsa ──
+        if tool_result and tool_result.get("tool"):
+            r = tool_result.get("result") or {}
+            response["tool"] = tool_result["tool"]
+            response["tool_verified"] = tool_result["verified"]
+            response["tool_reason"] = tool_result["reason"]
+            if isinstance(r, dict) and r.get("error"):
+                response["answer"] = f"🛠️ [{tool_result['tool']}] {r['error']}"
+            elif tool_result["tool"] == "hesap_yap":
+                response["answer"] = f"🛠️ [hesap] {r.get('sonuc', '?')}"
+            elif tool_result["tool"] == "zaman_sor":
+                response["answer"] = (f"🛠️ [zaman] Bugün {r.get('tarih')}, "
+                                      f"saat {r.get('saat')} ({r.get('gün')})")
+        elif response.get("answer") in (None, "") or "cevaplayamıyorum" in str(response.get("answer", "")):
+            tool_result = self.tools.call(question)
+            if tool_result.get("tool"):
+                response["tool"] = tool_result["tool"]
+                response["tool_verified"] = tool_result["verified"]
+                response["tool_reason"] = tool_result["reason"]
+                r = tool_result.get("result") or {}
+                if isinstance(r, dict) and r.get("error"):
+                    response["answer"] = f"🛠️ [{tool_result['tool']}] {r['error']}"
+                elif tool_result["tool"] == "hesap_yap" and isinstance(r, dict):
+                    response["answer"] = f"🛠️ [hesap] {r.get('sonuc', '?')}"
+                elif tool_result["tool"] == "zaman_sor" and isinstance(r, dict):
+                    response["answer"] = (f"🛠️ [zaman] Bugün {r.get('tarih')}, "
+                                          f"saat {r.get('saat')} ({r.get('gün')})")
+                elif tool_result["tool"] == "wikipedia_ara" and isinstance(r, dict) and r.get("extract"):
+                    response["answer"] = f"🛠️ [Wikipedia] {r['extract'][:200]}"
+                elif tool_result["tool"] == "veri_seti_tara" and isinstance(r, dict) and r.get("properties"):
+                    props = ", ".join(f"{k}: {v}" for k, v in r["properties"].items())
+                    response["answer"] = f"🛠️ [hafıza] {r['concept']} → {props}"
+
         response["_decoded"] = self.decoder.decode(response)
 
         self.conversation_log.append({"role": "system", "content": response,
@@ -3723,6 +3775,228 @@ class AttentionRouter:
             "focus_stats": focus_stats,
             "active_node_ids": list(active_set)[:20],
         }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AŞAMA 9: ToolRegistry — Sembolik Araç Seçici (Fonksiyon Çağırma)
+# Model "öğrenir": doğru aracı kurallarla seçer, sonuçları gate'ten geçirir.
+# ═══════════════════════════════════════════════════════════════════
+
+class ToolRegistry:
+    """
+    Araç kütüphanesi: her araç bir isim, açıklama, tetikleme kuralı
+    ve executor fonksiyonuna sahiptir. Araç seçimi SİMBOLİKTİR —
+    LLM'e gerek yoktur; sorudaki kelimeler kurallarla eşleştirilir.
+
+    Araç sonuçları her zaman gate/aksiyom kontrolünden geçer (güvenlik).
+    """
+
+    def __init__(self, kernel: 'ASIKernel' = None):
+        self.kernel = kernel
+        self.tools = {}      # isim → tool dict
+        self.call_log = []   # çağrı geçmişi (öğrenme verisi)
+        self.stats = {"calls": 0, "success": 0, "failed": 0}
+        self._register_default_tools()
+
+    def _register_default_tools(self):
+        """Yerleşik araçlar — her biri sembolik kural + executor."""
+        self.register_tool({
+            "name": "hesap_yap",
+            "description": "Matematiksel işlem çözer (toplama, çıkarma, çarpma, bölme, üs).",
+            "triggers": ["kaç", "eder", "kaçtır", "toplam", "çarp", "böl", "çıkar", "hesapla", "kare", "küp"],
+            "params": "ifade",
+            "executor": self._exec_hesap,
+        })
+        self.register_tool({
+            "name": "zaman_sor",
+            "description": "Şu anki tarih ve saati söyler.",
+            "triggers": ["saat", "tarih", "gün", "bugün", "zaman", "yıl", "ay"],
+            "params": "",
+            "executor": self._exec_zaman,
+        })
+        self.register_tool({
+            "name": "wikipedia_ara",
+            "description": "Wikipedia'da kavram arar ve tanım çeker.",
+            "triggers": ["nedir", "kimdir", "neymiş", "hakkında", "tanım", "açıkla", "anlat"],
+            "params": "kavram",
+            "executor": self._exec_wikipedia,
+        })
+        self.register_tool({
+            "name": "veri_seti_tara",
+            "description": "Yerel veri setlerinde kavramı arar (5N1K, synthetic data).",
+            "triggers": ["öğren", "kaydet", "ekle", "öğret"],
+            "params": "kavram",
+            "executor": self._exec_veri_seti,
+        })
+
+    def register_tool(self, tool: dict):
+        """Yeni araç kaydet (kendi kendine öğrenmenin genişletme noktası)."""
+        name = tool["name"]
+        tool.setdefault("use_count", 0)
+        self.tools[name] = tool
+
+    # ── Sembolik seçim: sorudan doğru aracı bul ──
+    def select_tool(self, question: str) -> Optional[dict]:
+        """
+        Sorudaki kelimeleri araç tetikleyicileriyle eşleştir.
+        Öncelik sırası: en çok eşleşen araç kazanır.
+        """
+        norm = AxiomEngine._normalize_tr
+        words = set(norm(w) for w in question.lower().split())
+        best_tool, best_score = None, 0
+        for tool in self.tools.values():
+            score = 0
+            for trig in tool["triggers"]:
+                t_norm = norm(trig)
+                if t_norm in words:
+                    score += 2  # tam kelime eşleşmesi
+                elif any(t_norm in w for w in words if len(w) > 3):
+                    score += 1  # kısmi eşleşme (örn: "kaçtır" içinde "kaç")
+            if score > best_score:
+                best_tool, best_score = tool, score
+        return best_tool if best_score > 0 else None
+
+    # ── Çağrı ve doğrulama ──
+    def call(self, question: str) -> dict:
+        """
+        Soruya uygun aracı seç, çalıştır, sonucu doğrula.
+        Dönen: {tool, result, verified, reason, call_id}
+        """
+        tool = self.select_tool(question)
+        if not tool:
+            return {"tool": None, "result": None, "verified": False,
+                    "reason": "Uygun araç bulunamadı"}
+
+        self.stats["calls"] += 1
+        tool["use_count"] += 1
+
+        # Parametreyi çıkar: araç tetikleyicisini sorudan ayır
+        params = self._extract_params(question, tool)
+        try:
+            result = tool["executor"](params)
+            self.stats["success"] += 1
+        except Exception as e:
+            self.stats["failed"] += 1
+            result = {"error": str(e)}
+
+        # Doğrulama: araç sonucu gate/aksiyom süzgecinden geçer
+        verified = False
+        reason = ""
+        if isinstance(result, dict) and result.get("error"):
+            verified = False
+            reason = f"Araç hatası: {result['error']}"
+        elif result is not None and str(result).strip():
+            verified = True
+            reason = f"Araç '{tool['name']}' çalıştı"
+            # Bilgi üreten araçlarda gate kontrolü (Wikipedia vb.)
+            if tool["name"] in ("wikipedia_ara", "veri_seti_tara") and self.kernel:
+                v = self._verify_with_gate(result)
+                if not v:
+                    verified = False
+                    reason = "Araç sonucu gate tarafından reddedildi (çelişki)"
+
+        call_id = len(self.call_log) + 1
+        self.call_log.append({
+            "id": call_id, "question": question, "tool": tool["name"],
+            "verified": verified, "time": datetime.now().isoformat()
+        })
+        return {"tool": tool["name"], "result": result, "verified": verified,
+                "reason": reason, "call_id": call_id}
+
+    def _extract_params(self, question: str, tool: dict) -> str:
+        """Soru metninden aracın parametresini çıkar."""
+        # Tetikleyici kelimeleri çıkar, kalan kısım parametredir
+        norm = AxiomEngine._normalize_tr
+        for trig in tool["triggers"]:
+            t_norm = norm(trig)
+            # "X nedir?" → "X"
+            idx = question.lower().find(trig)
+            if idx > 0:
+                return question[:idx].strip().strip('?:;,.')
+        return question.strip()
+
+    def _verify_with_gate(self, result) -> bool:
+        """Araç ürettiği bilgiyi gate'ten geçirir (çelişki kontrolü)."""
+        try:
+            if isinstance(result, dict):
+                # Wikipedia sonucu: kavram tanımı
+                ne = result.get("concept") or result.get("title") or ""
+                text = result.get("extract") or result.get("summary") or ""
+                if ne and text:
+                    # Basit isa çıkarımı ve gate
+                    m = re.search(r'[,\s]+bir\s+([\w\sğüşıöçĞÜŞİÖÇ]{2,40}?)(?:\'?dir|\'?dır|tir|tır)', text)
+                    if m:
+                        target = m.group(1).strip()
+                        g = self.kernel.contradictions.gate(
+                            ne=ne, properties={"isa": target},
+                            source=f"tool:wikipedia_ara", confidence=0.7
+                        )
+                        return bool(g.get("accepted", False) or g.get("is_duplicate", False))
+            return True  # tanım çıkarılamadıysa engelleme (bilgi yok)
+        except Exception:
+            return False
+
+    # ── Executor'lar ──
+    def _exec_hesap(self, ifade: str) -> dict:
+        """Güvenli matematiksel ifade değerlendirici (sadece sayı + operatör)."""
+        ifade = ifade.replace("kaç", "").replace("eder", "").replace("?", "").strip()
+        # Türkçe operatör kelimelerini sembollere çevir
+        ifade = (ifade.replace("çarpı", "*").replace("çarp", "*")
+                      .replace("bölü", "/").replace("böl", "/")
+                      .replace("artı", "+").replace("topla", "+")
+                      .replace("eksi", "-").replace("çıkar", "-")
+                      .replace("üssü", "^").replace("kare", "^2").replace("küp", "^3")
+                      .replace("x", "*").replace("X", "*")
+                      .replace(":", "/").replace("÷", "/"))
+        # Güvenlik: sadece sayılar ve operatörlere izin ver
+        if not re.fullmatch(r'[\d\s+\-*/().,%^]+', ifade):
+            return {"error": f"Güvensiz ifade: {ifade}"}
+        try:
+            iface_clean = ifade.replace("^", "**")
+            if re.fullmatch(r'[\d\s+\-*/().%**]+', iface_clean):
+                result = eval(iface_clean, {"__builtins__": {}}, {})
+                return {"sonuc": result, "ifade": ifade}
+            return {"error": "Desteklenmeyen işlem"}
+        except Exception as e:
+            return {"error": f"Hesaplama hatası: {e}"}
+
+    def _exec_zaman(self, _: str) -> dict:
+        """Şu anki tarih ve saat."""
+        now = datetime.now()
+        return {"tarih": now.strftime("%d.%m.%Y"), "saat": now.strftime("%H:%M:%S"),
+                "gün": now.strftime("%A")}
+
+    def _exec_wikipedia(self, kavram: str) -> dict:
+        """Wikipedia'dan kavramın tanımını çeker."""
+        if not self.kernel or not hasattr(self.kernel, "web_ingester"):
+            return {"error": "Web ingester yok"}
+        kavram = kavram.strip()
+        if not kavram:
+            return {"error": "Kavram boş"}
+        data = self.kernel.web_ingester.fetch_concept_text(kavram, strategy="tr")
+        if not data:
+            return {"error": f"Wikipedia'da bulunamadı: {kavram}"}
+        return {"concept": kavram, "title": data.get("title", ""),
+                "extract": data.get("text", "")[:500]}
+
+    def _exec_veri_seti(self, kavram: str) -> dict:
+        """Yerel veri setlerinde kavramı arar."""
+        if not self.kernel:
+            return {"error": "Kernel yok"}
+        kavram = kavram.strip()
+        if not kavram:
+            return {"error": "Kavram boş"}
+        # Hafızada ara
+        norm = AxiomEngine._normalize_tr
+        for node in self.kernel.hooks.nodes.values():
+            if norm(kavram) in norm(node.ne):
+                return {"concept": node.ne, "properties": node.properties,
+                        "kaynak": "hafıza"}
+        return {"error": f"Veri setlerinde bulunamadı: {kavram}"}
+
+    def get_stats(self) -> dict:
+        return {**self.stats,
+                "tools": {n: t["use_count"] for n, t in self.tools.items()}}
 
 
 # ═══════════════════════════════════════════════════════════════════
