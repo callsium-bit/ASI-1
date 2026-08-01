@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-08-01T03:00:19.698837",
+  "timestamp": "2026-08-01T04:00:22.901885",
   "initial_state": {
     "total_axioms": 20,
-    "total_nodes": 883,
+    "total_nodes": 911,
     "total_hooks": 1864,
-    "isolated_nodes": 253,
+    "isolated_nodes": 281,
     "entity_types": {
       "madde": "fiziksel",
       "yercekimi_etkisinde": "soyut",
@@ -68,9 +68,9 @@
   },
   "final_state": {
     "total_axioms": 20,
-    "total_nodes": 911,
+    "total_nodes": 939,
     "total_hooks": 1864,
-    "isolated_nodes": 281,
+    "isolated_nodes": 309,
     "entity_types": {
       "madde": "fiziksel",
       "yercekimi_etkisinde": "soyut",
@@ -115,7 +115,7 @@
     "duplicates": 117,
     "skipped": 0,
     "elapsed_sec": 0.49,
-    "rate_per_sec": 4081.3
+    "rate_per_sec": 4047.9
   },
   "self_test": {
     "passed": true,
