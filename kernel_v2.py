@@ -23,7 +23,6 @@ import html
 import time
 import threading
 import os
-import unicodedata
 
 # ═══════════════════════════════════════════════════════════════════
 # GLOBAL AYAR: Yerel LLM (LM Studio) tamamen kapalı
@@ -210,10 +209,6 @@ class AxiomEngine:
 
     @staticmethod
     def _normalize_tr(text: str) -> str:
-        # Önce Unicode NFKD: "İ" → "i" + combining dot gibi birleşik karakterleri ayrıştır
-        text = unicodedata.normalize('NFKD', text)
-        # Combining işaretleri at (i+dot → i)
-        text = ''.join(c for c in text if not unicodedata.combining(c))
         tr_map = str.maketrans("ğĞşŞıİüÜöÖçÇ", "gGsSiIuUoOcC")
         return text.translate(tr_map).lower()
 
@@ -1168,12 +1163,6 @@ class ASIKernel:
         self.conversation_log: List[dict] = []
         self._knowledge_path = knowledge_path
 
-        # Web ingestion köprüsü (hibrit döngü için)
-        self.web_ingester = WebKnowledgeIngester(self)
-
-        # Aşama 9: Araç kütüphanesi (fonksiyon çağırma)
-        self.tools = ToolRegistry(self)
-
         # Kalıcı hafıza: varsa yükle, yoksa tohum veri ile başla
         loaded = False
         if auto_load and KnowledgeStore.exists(knowledge_path):
@@ -1199,20 +1188,10 @@ class ASIKernel:
             self.hooks.create_node(ne=ne, properties=props, source="tohum_veri")
 
     def save_knowledge(self, path: str = None) -> dict:
-        """Bilgi tabanını diske kaydet. 10GB hafıza sınırı uygulanır."""
-        target = path or self._knowledge_path or KnowledgeStore.DEFAULT_PATH
-        # 10GB sınır kontrolü
-        if os.path.exists(target):
-            try:
-                size_mb = os.path.getsize(target) / (1024 * 1024)
-                if size_mb >= 10 * 1024:  # 10GB
-                    return {"error": "Hafıza 10GB sınırına ulaştı — yeni bilgi kaydedilmiyor",
-                            "size_mb": round(size_mb, 1), "limit_gb": 10}
-            except OSError:
-                pass
+        """Bilgi tabanını diske kaydet."""
         return KnowledgeStore.save(
             self.hooks, self.contradictions.isolation_zone,
-            target
+            path or self._knowledge_path
         )
 
     def load_knowledge(self, path: str = None) -> dict:
@@ -1233,61 +1212,7 @@ class ASIKernel:
         words.discard('')
 
         query_result = self.hooks.query(question)
-
-        # ── Aşama 9a: Zaman/Hesap soruları ÖNCELİKLİ araç (aksiyomla karışmasın) ──
-        tool_result = None
-        norm_words = words
-        zaman_tetik = {"saat", "tarih", "bugün", "zaman", "dakika"}
-        hesap_tetik = {"kaç", "eder", "çarp", "böl", "topla", "çıkar", "kare", "küp", "hesapla"}
-        # "nedir" sorusu = kavram sorusu → zaman aracı DEVREDE DEĞİL
-        # (örn: "Orta Çağ Tarihi nedir?" ≠ zaman sorusu)
-        is_concept_question = any(norm(w) in {"nedir", "kimdir", "neymiş"} for w in norm_words)
-        # "saat/tarih/bugün" NET zaman işareti → "kaç" hesap olsa bile zaman kazanır
-        net_zaman = {"saat", "tarih", "bugün", "zaman", "dakika"} & norm_words
-        if net_zaman and not any(w.isdigit() for w in norm_words) and not is_concept_question:
-            tool_result = self.tools.call(question)
-            if tool_result.get("tool") != "zaman_sor":
-                tool_result = None
-        elif hesap_tetik & norm_words and any(w.isdigit() for w in norm_words):
-            tool_result = self.tools.call(question)
-            if tool_result.get("tool") != "hesap_yap":
-                tool_result = None
-
         response = self._reason_about_question(question, words, query_result)
-
-        # ── Aşama 9b: Sembolik mantık çözemediyse veya öncelikli araç varsa ──
-        if tool_result and tool_result.get("tool"):
-            r = tool_result.get("result") or {}
-            response["tool"] = tool_result["tool"]
-            response["tool_verified"] = tool_result["verified"]
-            response["tool_reason"] = tool_result["reason"]
-            if isinstance(r, dict) and r.get("error"):
-                response["answer"] = f"🛠️ [{tool_result['tool']}] {r['error']}"
-            elif tool_result["tool"] == "hesap_yap":
-                response["answer"] = f"🛠️ [hesap] {r.get('sonuc', '?')}"
-            elif tool_result["tool"] == "zaman_sor":
-                response["answer"] = (f"🛠️ [zaman] Bugün {r.get('tarih')}, "
-                                      f"saat {r.get('saat')} ({r.get('gün')})")
-        elif response.get("answer") in (None, "") or "cevaplayamıyorum" in str(response.get("answer", "")):
-            tool_result = self.tools.call(question)
-            if tool_result.get("tool"):
-                response["tool"] = tool_result["tool"]
-                response["tool_verified"] = tool_result["verified"]
-                response["tool_reason"] = tool_result["reason"]
-                r = tool_result.get("result") or {}
-                if isinstance(r, dict) and r.get("error"):
-                    response["answer"] = f"🛠️ [{tool_result['tool']}] {r['error']}"
-                elif tool_result["tool"] == "hesap_yap" and isinstance(r, dict):
-                    response["answer"] = f"🛠️ [hesap] {r.get('sonuc', '?')}"
-                elif tool_result["tool"] == "zaman_sor" and isinstance(r, dict):
-                    response["answer"] = (f"🛠️ [zaman] Bugün {r.get('tarih')}, "
-                                          f"saat {r.get('saat')} ({r.get('gün')})")
-                elif tool_result["tool"] == "wikipedia_ara" and isinstance(r, dict) and r.get("extract"):
-                    response["answer"] = f"🛠️ [Wikipedia] {r['extract'][:200]}"
-                elif tool_result["tool"] == "veri_seti_tara" and isinstance(r, dict) and r.get("properties"):
-                    props = ", ".join(f"{k}: {v}" for k, v in r["properties"].items())
-                    response["answer"] = f"🛠️ [hafıza] {r['concept']} → {props}"
-
         response["_decoded"] = self.decoder.decode(response)
 
         self.conversation_log.append({"role": "system", "content": response,
@@ -1322,72 +1247,6 @@ class ASIKernel:
         for alg in ["ses", "koku"]:
             if norm(alg) in words and found_actions:
                 return self._handle_perception_action_question(question, alg)
-
-        # --- 🧠 ÖĞRENİLMİŞ HAFIZA SORGUSU: "X nedir?" ---
-        # Kristal düğümlerdeki isa bilgisiyle cevapla
-        is_what_question = any(norm(w) in {"nedir", "ne", "neymiş", "nedirler", "kimdir"} for w in words)
-        if is_what_question:
-            # 1. Önce TAM ifadeyle dene: "nedir"den önceki kısım
-            q_clean = question.lower().rstrip("?")
-            expr = re.sub(r'\s*(nedir|neymiş|nedirler|kimdir|de nedir|da nedir|ne)\s*$', '', q_clean).strip()
-            expr = re.sub(r'^(bana|söyle|anlat|soruyorum)\s+', '', expr)
-            if expr:
-                expr_nodes = self.hooks.get_hook_nodes(norm(expr))
-                for node in expr_nodes:
-                    if node.isolated:
-                        continue
-                    props = node.properties
-                    if "isa" in props:
-                        return {
-                            "question": question, "entity": node.ne,
-                            "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
-                            "source": node.source, "confidence": node.confidence,
-                            "from_memory": True
-                        }
-
-                # 1b. KISMI EŞLEŞME: expr, düğüm adının bir parçasıysa
-                if not expr_nodes:
-                    expr_norm = norm(expr)
-                    for node in self.hooks.nodes.values():
-                        if node.isolated:
-                            continue
-                        if expr_norm in norm(node.ne) or norm(node.ne) in expr_norm:
-                            props = node.properties
-                            if "isa" in props:
-                                return {
-                                    "question": question, "entity": node.ne,
-                                    "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
-                                    "source": node.source, "confidence": node.confidence,
-                                    "from_memory": True
-                                }
-
-            # 2. Kelime bazlı (tek kelimelik kavramlar)
-            for word in words:
-                if norm(word) in {"nedir", "ne", "neymiş", "kimdir", "mi", "mu", "mı", "mü", "?", ""}:
-                    continue
-                nodes = self.hooks.get_hook_nodes(norm(word))
-                for node in nodes:
-                    if node.isolated:
-                        continue
-                    props = node.properties
-                    if "isa" in props:
-                        return {
-                            "question": question, "entity": node.ne,
-                            "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
-                            "source": node.source, "confidence": node.confidence,
-                            "from_memory": True
-                        }
-                    # Diğer özellikler
-                    if props and len(props) == 1 and not node.ne.endswith(("dir", "dır")):
-                        k = list(props.keys())[0]
-                        v = props[k]
-                        return {
-                            "question": question,
-                            "entity": node.ne,
-                            "answer": f"{node.ne}'nin {k}: {v}.",
-                            "source": node.source,
-                            "from_memory": True
-                        }
 
         # --- Genel varlık sorgusu ---
         for word in words:
@@ -1460,27 +1319,6 @@ class ASIKernel:
             "axioms_used": ["ax_su_islatir", "ax_renk_algi", "ax_mavi_renktir"],
             "verdict": "Islanmak ≠ Renklenmek. Su renksizdir, sadece ıslatır."
         }
-
-    def _tr_dır(self, word: str) -> str:
-        """Türkçe ünlü uyumuna göre 'dır/dir/tır/tir' ekle."""
-        word = word.strip().rstrip("'")
-        if not word:
-            return word
-        last = word[-1]
-        # Sert ünsüzlerden sonra t, yumuşaklardan sonra d gelir
-        sert = "pçtksşhf"
-        kok = "t" if last in sert else "d"
-        # Son ünlüye göre kalın (aıou) / ince (eiöü)
-        son_unlu = None
-        for c in reversed(word):
-            if c in "aeiıöüou":
-                son_unlu = c
-                break
-        if son_unlu is None:
-            return word + kok + "ır"
-        kalin = son_unlu in "aıou"
-        return word + kok + ("ır" if kalin else "ir")
-
 
     def _handle_sky_question(self, question: str) -> dict:
         return {
@@ -1740,65 +1578,28 @@ class ASIKernel:
         while max_iterations == 0 or iteration < max_iterations:
             from kernel_v2 import LocalLLMDistiller
             distiller = LocalLLMDistiller(self)
-
-            # ── HİBRİT SEÇİM: %70 yeni kavram + %30 derinleştirme ──
             gaps = distiller.detect_gaps(limit=20)
-            new_concepts = self.web_ingester.suggest_new_concepts(count=7) if hasattr(self, "web_ingester") else []
-
-            if not gaps and not new_concepts:
-                print("\n   ✅ Tüm boşluklar dolduruldu, yeni kavram önerisi yok!")
+            
+            if not gaps:
+                print("\n   ✅ Tüm boşluklar dolduruldu!")
                 break
-
-            # Seçim listesi: önce yeni kavramlar (yeni bilgi), sonra gap'ler (derinleştirme)
-            selected = []
-            for nc in new_concepts[:5]:  # %70: yeni keşif
-                if nc not in summary["concepts_processed"]:
-                    selected.append({"type": "new_concept", "concept": nc})
-            for gap in gaps[:5]:  # %30: derinleştirme
-                if gap["concept"] not in summary["concepts_processed"]:
-                    selected.append({"type": gap["type"], "concept": gap["concept"]})
-            if not selected:
-                # ── NO_PROGRESS: durma, Wikipedia rastgele kavramlarla devam et ──
-                # (suggest_new_concepts veri setinden bulamazsa Wikipedia'ya düşer)
-                more = self.web_ingester.suggest_new_concepts(count=8) if hasattr(self, "web_ingester") else []
-                for nc in more:
-                    if nc not in summary["concepts_processed"]:
-                        selected.append({"type": "new_concept", "concept": nc})
-            if not selected:
-                # Gerçekten hiçbir kaynak yoksa: Wikipedia fallback'i zorla
-                try:
-                    import urllib.request
-                    url = ("https://tr.wikipedia.org/w/api.php"
-                           "?action=query&list=random&rnnamespace=0&rnlimit=10&format=json")
-                    req = urllib.request.Request(url, headers={
-                        "User-Agent": "ASI-1/0.1 (educational research bot; contact: asi1@example.com)"})
-                    with urllib.request.urlopen(req, timeout=15) as resp:
-                        data = json.loads(resp.read().decode("utf-8"))
-                    for item in data.get("query", {}).get("random", []):
-                        t = item.get("title", "").strip()
-                        if t and t not in summary["concepts_processed"] and len(t) <= 40:
-                            selected.append({"type": "new_concept", "concept": t})
-                except Exception:
-                    pass
-            if not selected:
-                summary["stopped_by"] = "no_progress"
-                break
-
+                
             iteration += 1
             print(f"\n{'='*50}")
-            print(f"🔄 Tur #{iteration}: {len(selected)} kavram "
-                  f"({len([s for s in selected if s['type']=='new_concept'])} yeni + "
-                  f"{len([s for s in selected if s['type']!='new_concept'])} derinleştirme)")
+            print(f"🔄 Tur #{iteration}: {len(gaps)} boşluk")
             print(f"{'='*50}")
-
+            
             processed = 0
-            for item in selected:
-                concept = item["concept"]
-                print(f"\n   🎯 [{item['type']}] {concept}")
-
+            for gap in gaps:
+                concept = gap["concept"]
+                if concept in summary["concepts_processed"]:
+                    continue
+                    
+                print(f"\n   🎯 [{gap['type']}] {concept}")
+                
                 # Streaming pipeline: regex → FastPath → Queue → Batch
                 r = pipeline.process_web_concept(concept, strategy)
-
+                
                 summary["concepts_processed"].append(concept)
                 summary["total_accepted"] += r["fast_accepted"]
                 summary["total_rejected"] += r["fast_rejected"]
@@ -2358,95 +2159,6 @@ class WebKnowledgeIngester:
     Kesintisiz döngü: Yeni kancalar bulundukça devam eder.
     """
 
-    def suggest_new_concepts(self, count: int = 5) -> List[str]:
-        """
-        Yeni kavram önerileri — önce yerel veri setlerinden (tanım cümleli),
-        bulunamazsa Wikipedia rastgele sayfa API'sinden.
-        Hafızada zaten olanlar elenir.
-        """
-        if count <= 0:
-            return []
-
-        norm = AxiomEngine._normalize_tr
-        known = {norm(n.ne) for n in self.kernel.hooks.nodes.values()}
-        new_concepts = []
-
-        # ── Kaynak 1: Yerel veri setleri (kaliteli tanım cümleleri) ──
-        try:
-            import json as _json
-            import random as _random
-            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
-            candidates = []
-            for ds_path in [
-                os.path.join(desktop, "projelerim", "data", "archive", "synthetic_data.jsonl"),
-                os.path.join(desktop, "5n1k_temiz_59k.jsonl"),
-            ]:
-                if os.path.exists(ds_path):
-                    # Rastgele başlangıç: her çağrıda farklı konular
-                    with open(ds_path, 'r', encoding='utf-8') as f:
-                        all_lines = f.readlines()
-                    _random.shuffle(all_lines)
-                    for line in all_lines[:300]:
-                        try:
-                            rec = _json.loads(line)
-                            konu = rec.get("konu", "").strip()
-                            if konu and len(konu) <= 40 and konu not in candidates:
-                                candidates.append(konu)
-                        except _json.JSONDecodeError:
-                            continue
-                        if len(candidates) > 300:
-                            break
-                if len(new_concepts) >= count:
-                    break
-            for konu in candidates:
-                t_norm = norm(konu)
-                if t_norm in known:
-                    continue
-                if "," in konu or "(" in konu:
-                    continue
-                new_concepts.append(konu)
-                if len(new_concepts) >= count:
-                    return new_concepts
-        except Exception:
-            pass
-
-        # ── Kaynak 2: Wikipedia rastgele (fallback) ──
-        try:
-            self._rate_limit_wait()
-            url = (
-                "https://tr.wikipedia.org/w/api.php"
-                f"?action=query&list=random&rnnamespace=0&rnlimit={count * 3}"
-                "&format=json"
-            )
-            req = urllib.request.Request(url, headers={
-                "User-Agent": "ASI-1/0.1 (educational research bot; contact: asi1@example.com)"
-            })
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            self._last_request_time = time.time()
-        except Exception as e:
-            self.stats["wiki_errors"] = self.stats.get("wiki_errors", 0) + 1
-            return new_concepts
-
-        for item in data.get("query", {}).get("random", []):
-            title = item.get("title", "").strip()
-            if not title or len(title) > 40:
-                continue
-            low = title.lower()
-            if "(anlam" in low or "(değiştir)" in low:
-                continue
-            if "," in title or "(" in title or ")" in title:
-                continue
-            if any(s in low for s in ("sendikası", "derneği", "belediyesi", "ilçesi", "köyü")):
-                continue
-            t_norm = norm(title)
-            if t_norm in known:
-                continue
-            new_concepts.append(title)
-            if len(new_concepts) >= count:
-                break
-        return new_concepts
-
     EXTRACT_PROMPT = (
         "Sen bir bilgi çıkarım asistanısın. Görevin: Verilen metindeki "
         "TEMEL ve KESİN ilişkileri isa, hasa, yapamaz formatında JSON olarak çıkarmak.\n\n"
@@ -2801,7 +2513,8 @@ class WebKnowledgeIngester:
                 r'(?:nin|nın|in|ın|un|ün)\s+'
                 r'(?P<property>sıcaklığı|büyüklüğü|ağırlığı|hızı|yapısı|şekli|kalınlığı|'
                 r'türü|cinsi|çeşidi|maddesi|rengi|nedeni|sonucu|amacı|görevi|işlevi|'
-                r'başkenti|nüfusu|yüzölçümü|uzunluğu|yüksekliği|derinliği)\s+'
+                r'merkezi|başkenti|nüfusu|yüzölçümü|uzunluğu|yüksekliği|derinliği|'
+                r'ortalama\s+[\wğüşıöç]+|[\wğüşıöç]{3,20}(?:i|ı|u|ü|si|sı|su|sü))\s+'
                 r'(?P<value>[\w\sğüşıöçĞÜŞİÖÇ\-\d.,%°]{2,70}?)(?:\'?dir|\'?dır|\.|,|;|\s+olarak)',
                 re.I
             ),
@@ -3318,17 +3031,13 @@ class UnresolvedQueue:
             for item in batch:
                 # Deterministik kural: "isa" ilişkileri güvenli kabul
                 if item.get("rel_type") == "isa" and item.get("target"):
-                    # ✅ DÜZELTME: gate üzerinden geç (bypass yasak — contradiction + dedup)
-                    gate_result = self.kernel.contradictions.gate(
+                    node = self.kernel.hooks.create_node(
                         ne=item["concept"],
                         properties={"isa": item["target"]},
                         source="batch_sembolik (LLM kapalı)",
-                        confidence=0.6,
-                        rel_type="isa"
+                        confidence=0.6
                     )
-                    if gate_result["accepted"]:
-                        resolved += 1
-                    # Gate reddettiyse düğümü zaten izole etti — ekstra yazım yok
+                    resolved += 1
                 else:
                     # Diğerleri izole et
                     node = CrystalNode(
@@ -3821,229 +3530,6 @@ class AttentionRouter:
             "focus_stats": focus_stats,
             "active_node_ids": list(active_set)[:20],
         }
-
-
-# ═══════════════════════════════════════════════════════════════════
-# AŞAMA 9: ToolRegistry — Sembolik Araç Seçici (Fonksiyon Çağırma)
-# Model "öğrenir": doğru aracı kurallarla seçer, sonuçları gate'ten geçirir.
-# ═══════════════════════════════════════════════════════════════════
-
-class ToolRegistry:
-    """
-    Araç kütüphanesi: her araç bir isim, açıklama, tetikleme kuralı
-    ve executor fonksiyonuna sahiptir. Araç seçimi SİMBOLİKTİR —
-    LLM'e gerek yoktur; sorudaki kelimeler kurallarla eşleştirilir.
-
-    Araç sonuçları her zaman gate/aksiyom kontrolünden geçer (güvenlik).
-    """
-
-    def __init__(self, kernel: 'ASIKernel' = None):
-        self.kernel = kernel
-        self.tools = {}      # isim → tool dict
-        self.call_log = []   # çağrı geçmişi (öğrenme verisi)
-        self.stats = {"calls": 0, "success": 0, "failed": 0}
-        self._register_default_tools()
-
-    def _register_default_tools(self):
-        """Yerleşik araçlar — her biri sembolik kural + executor."""
-        self.register_tool({
-            "name": "hesap_yap",
-            "description": "Matematiksel işlem çözer (toplama, çıkarma, çarpma, bölme, üs).",
-            "triggers": ["kaç", "eder", "kaçtır", "toplam", "çarp", "böl", "çıkar", "hesapla", "kare", "küp"],
-            "params": "ifade",
-            "executor": self._exec_hesap,
-        })
-        self.register_tool({
-            "name": "zaman_sor",
-            "description": "Şu anki tarih ve saati söyler.",
-            "triggers": ["saat", "tarih", "gün", "bugün", "zaman", "yıl", "ay"],
-            "params": "",
-            "executor": self._exec_zaman,
-        })
-        self.register_tool({
-            "name": "wikipedia_ara",
-            "description": "Wikipedia'da kavram arar ve tanım çeker.",
-            "triggers": ["nedir", "kimdir", "neymiş", "hakkında", "tanım", "açıkla", "anlat"],
-            "params": "kavram",
-            "executor": self._exec_wikipedia,
-        })
-        self.register_tool({
-            "name": "veri_seti_tara",
-            "description": "Yerel veri setlerinde kavramı arar (5N1K, synthetic data).",
-            "triggers": ["öğren", "kaydet", "ekle", "öğret"],
-            "params": "kavram",
-            "executor": self._exec_veri_seti,
-        })
-
-    def register_tool(self, tool: dict):
-        """Yeni araç kaydet (kendi kendine öğrenmenin genişletme noktası)."""
-        name = tool["name"]
-        tool.setdefault("use_count", 0)
-        self.tools[name] = tool
-
-    # ── Sembolik seçim: sorudan doğru aracı bul ──
-    def select_tool(self, question: str) -> Optional[dict]:
-        """
-        Sorudaki kelimeleri araç tetikleyicileriyle eşleştir.
-        Öncelik sırası: en çok eşleşen araç kazanır.
-        """
-        norm = AxiomEngine._normalize_tr
-        words = set(norm(w) for w in question.lower().strip('?.').split())
-        best_tool, best_score = None, 0
-        for tool in self.tools.values():
-            score = 0
-            for trig in tool["triggers"]:
-                t_norm = norm(trig)
-                if t_norm in words:
-                    score += 2  # tam kelime eşleşmesi
-                elif any(t_norm in w for w in words if len(w) > 3):
-                    score += 1  # kısmi eşleşme (örn: "kaçtır" içinde "kaç")
-            # Beraberlikte zaman_sor önceliklidir (saat kaç? vs 7 çarpı kaç?)
-            if score > best_score or (score == best_score and tool["name"] == "zaman_sor"):
-                best_tool, best_score = tool, score
-        return best_tool if best_score > 0 else None
-
-    # ── Çağrı ve doğrulama ──
-    def call(self, question: str) -> dict:
-        """
-        Soruya uygun aracı seç, çalıştır, sonucu doğrula.
-        Dönen: {tool, result, verified, reason, call_id}
-        """
-        tool = self.select_tool(question)
-        if not tool:
-            return {"tool": None, "result": None, "verified": False,
-                    "reason": "Uygun araç bulunamadı"}
-
-        self.stats["calls"] += 1
-        tool["use_count"] += 1
-
-        # Parametreyi çıkar: araç tetikleyicisini sorudan ayır
-        params = self._extract_params(question, tool)
-        try:
-            result = tool["executor"](params)
-            self.stats["success"] += 1
-        except Exception as e:
-            self.stats["failed"] += 1
-            result = {"error": str(e)}
-
-        # Doğrulama: araç sonucu gate/aksiyom süzgecinden geçer
-        verified = False
-        reason = ""
-        if isinstance(result, dict) and result.get("error"):
-            verified = False
-            reason = f"Araç hatası: {result['error']}"
-        elif result is not None and str(result).strip():
-            verified = True
-            reason = f"Araç '{tool['name']}' çalıştı"
-            # Bilgi üreten araçlarda gate kontrolü (Wikipedia vb.)
-            if tool["name"] in ("wikipedia_ara", "veri_seti_tara") and self.kernel:
-                v = self._verify_with_gate(result)
-                if not v:
-                    verified = False
-                    reason = "Araç sonucu gate tarafından reddedildi (çelişki)"
-
-        call_id = len(self.call_log) + 1
-        self.call_log.append({
-            "id": call_id, "question": question, "tool": tool["name"],
-            "verified": verified, "time": datetime.now().isoformat()
-        })
-        return {"tool": tool["name"], "result": result, "verified": verified,
-                "reason": reason, "call_id": call_id}
-
-    def _extract_params(self, question: str, tool: dict) -> str:
-        """Soru metninden aracın parametresini çıkar."""
-        # Tetikleyici kelimeleri çıkar, kalan kısım parametredir
-        norm = AxiomEngine._normalize_tr
-        for trig in tool["triggers"]:
-            t_norm = norm(trig)
-            # "X nedir?" → "X"
-            idx = question.lower().find(trig)
-            if idx > 0:
-                return question[:idx].strip().strip('?:;,.')
-        return question.strip()
-
-    def _verify_with_gate(self, result) -> bool:
-        """Araç ürettiği bilgiyi gate'ten geçirir (çelişki kontrolü)."""
-        try:
-            if isinstance(result, dict):
-                # Wikipedia sonucu: kavram tanımı
-                ne = result.get("concept") or result.get("title") or ""
-                text = result.get("extract") or result.get("summary") or ""
-                if ne and text:
-                    # Basit isa çıkarımı ve gate
-                    m = re.search(r'[,\s]+bir\s+([\w\sğüşıöçĞÜŞİÖÇ]{2,40}?)(?:\'?dir|\'?dır|tir|tır)', text)
-                    if m:
-                        target = m.group(1).strip()
-                        g = self.kernel.contradictions.gate(
-                            ne=ne, properties={"isa": target},
-                            source=f"tool:wikipedia_ara", confidence=0.7
-                        )
-                        return bool(g.get("accepted", False) or g.get("is_duplicate", False))
-            return True  # tanım çıkarılamadıysa engelleme (bilgi yok)
-        except Exception:
-            return False
-
-    # ── Executor'lar ──
-    def _exec_hesap(self, ifade: str) -> dict:
-        """Güvenli matematiksel ifade değerlendirici (sadece sayı + operatör)."""
-        ifade = ifade.replace("kaç", "").replace("eder", "").replace("?", "").strip()
-        # Türkçe operatör kelimelerini sembollere çevir
-        ifade = (ifade.replace("çarpı", "*").replace("çarp", "*")
-                      .replace("bölü", "/").replace("böl", "/")
-                      .replace("artı", "+").replace("topla", "+")
-                      .replace("eksi", "-").replace("çıkar", "-")
-                      .replace("üssü", "^").replace("kare", "^2").replace("küp", "^3")
-                      .replace("x", "*").replace("X", "*")
-                      .replace(":", "/").replace("÷", "/"))
-        # Güvenlik: sadece sayılar ve operatörlere izin ver
-        if not re.fullmatch(r'[\d\s+\-*/().,%^]+', ifade):
-            return {"error": f"Güvensiz ifade: {ifade}"}
-        try:
-            iface_clean = ifade.replace("^", "**")
-            if re.fullmatch(r'[\d\s+\-*/().%**]+', iface_clean):
-                result = eval(iface_clean, {"__builtins__": {}}, {})
-                return {"sonuc": result, "ifade": ifade}
-            return {"error": "Desteklenmeyen işlem"}
-        except Exception as e:
-            return {"error": f"Hesaplama hatası: {e}"}
-
-    def _exec_zaman(self, _: str) -> dict:
-        """Şu anki tarih ve saat."""
-        now = datetime.now()
-        return {"tarih": now.strftime("%d.%m.%Y"), "saat": now.strftime("%H:%M:%S"),
-                "gün": now.strftime("%A")}
-
-    def _exec_wikipedia(self, kavram: str) -> dict:
-        """Wikipedia'dan kavramın tanımını çeker."""
-        if not self.kernel or not hasattr(self.kernel, "web_ingester"):
-            return {"error": "Web ingester yok"}
-        kavram = kavram.strip()
-        if not kavram:
-            return {"error": "Kavram boş"}
-        data = self.kernel.web_ingester.fetch_concept_text(kavram, strategy="tr")
-        if not data:
-            return {"error": f"Wikipedia'da bulunamadı: {kavram}"}
-        return {"concept": kavram, "title": data.get("title", ""),
-                "extract": data.get("text", "")[:500]}
-
-    def _exec_veri_seti(self, kavram: str) -> dict:
-        """Yerel veri setlerinde kavramı arar."""
-        if not self.kernel:
-            return {"error": "Kernel yok"}
-        kavram = kavram.strip()
-        if not kavram:
-            return {"error": "Kavram boş"}
-        # Hafızada ara
-        norm = AxiomEngine._normalize_tr
-        for node in self.kernel.hooks.nodes.values():
-            if norm(kavram) in norm(node.ne):
-                return {"concept": node.ne, "properties": node.properties,
-                        "kaynak": "hafıza"}
-        return {"error": f"Veri setlerinde bulunamadı: {kavram}"}
-
-    def get_stats(self) -> dict:
-        return {**self.stats,
-                "tools": {n: t["use_count"] for n, t in self.tools.items()}}
 
 
 # ═══════════════════════════════════════════════════════════════════
