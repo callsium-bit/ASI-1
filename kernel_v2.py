@@ -127,6 +127,9 @@ class CrystalNode:
     contradiction_count: int = 0
     evidence: List[str] = field(default_factory=list)
     status: str = "active"  # "active" | "isolated" | "pending"
+    # V0.2: Confidence metadata
+    sources: List[str] = field(default_factory=list)
+    last_verified: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def get_5n1k_vector(self) -> Tuple[str, ...]:
         return (self.ne, self.nerede, self.ne_zaman, self.nasil, self.neden, self.kim)
@@ -141,7 +144,8 @@ class CrystalNode:
             "created_at": self.created_at,
             "verification_count": self.verification_count,
             "contradiction_count": self.contradiction_count,
-            "evidence": self.evidence, "status": self.status
+            "evidence": self.evidence, "status": self.status,
+            "sources": self.sources, "last_verified": self.last_verified
         }
 
 
@@ -436,6 +440,10 @@ class HookEngine:
         # Evidence ekle
         if source and source not in existing.evidence:
             existing.evidence.append(source)
+        # V0.2: sources + last_verified güncelle
+        if source and source not in existing.sources:
+            existing.sources.append(source)
+        existing.last_verified = datetime.now().isoformat()
         self.dedup_stats["duplicates_found"] += 1
         return existing
 
@@ -454,7 +462,9 @@ class HookEngine:
             id=self._next_id(), ne=ne, nerede=nerede, ne_zaman=ne_zaman,
             nasil=nasil, neden=neden, kim=kim,
             properties=props, source=source, confidence=confidence,
-            evidence=[source] if source else []
+            evidence=[source] if source else [],
+            sources=[source] if source else [],
+            last_verified=datetime.now().isoformat()
         )
         self.nodes[node.id] = node
         self._hook_node(node)
@@ -1125,7 +1135,9 @@ class KnowledgeStore:
                 verification_count=nd.get("verification_count", 1),
                 contradiction_count=nd.get("contradiction_count", 0),
                 evidence=nd.get("evidence", []),
-                status=nd.get("status", "active")
+                status=nd.get("status", "active"),
+                sources=nd.get("sources", []),
+                last_verified=nd.get("last_verified", datetime.now().isoformat()),
             )
             hook_engine.nodes[node.id] = node
             hook_engine._hook_node(node)
