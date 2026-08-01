@@ -1,10 +1,10 @@
 {
-  "timestamp": "2026-08-01T05:00:24.302314",
+  "timestamp": "2026-08-01T06:00:26.870855",
   "initial_state": {
     "total_axioms": 20,
-    "total_nodes": 939,
+    "total_nodes": 967,
     "total_hooks": 1864,
-    "isolated_nodes": 309,
+    "isolated_nodes": 337,
     "entity_types": {
       "madde": "fiziksel",
       "yercekimi_etkisinde": "soyut",
@@ -38,30 +38,39 @@
     },
     "conversation_turns": 0
   },
-  "concepts_processed": [],
+  "concepts_processed": [
+    {
+      "concept": "yagmur",
+      "source": "Yağmur",
+      "relations": 1,
+      "accepted": 0,
+      "rejected": 0,
+      "unresolved": 1,
+      "duplicates": 0
+    }
+  ],
   "errors": [
     "gokyuzu: Wikipedia'da bulunamadı",
-    "yagmur: Wikipedia'da bulunamadı",
     "su: Wikipedia'da bulunamadı"
   ],
   "stats": {
-    "total_items": 0,
+    "total_items": 1,
     "accepted_by_fast_path": 0,
     "rejected_by_fast_path": 0,
-    "unresolved": 0,
-    "llm_calls": 0,
+    "unresolved": 1,
+    "llm_calls": 1,
     "duplicate_items": 0,
-    "new_knowledge": 0,
+    "new_knowledge": 1,
     "contradictions": 0,
-    "llm_dependency_ratio": 0.0,
+    "llm_dependency_ratio": 1.0,
     "dataset_accepted": 0,
     "dataset_duplicates": 117
   },
   "final_state": {
     "total_axioms": 20,
-    "total_nodes": 967,
+    "total_nodes": 995,
     "total_hooks": 1864,
-    "isolated_nodes": 337,
+    "isolated_nodes": 365,
     "entity_types": {
       "madde": "fiziksel",
       "yercekimi_etkisinde": "soyut",
@@ -105,8 +114,8 @@
     "unresolved": 0,
     "duplicates": 117,
     "skipped": 0,
-    "elapsed_sec": 0.48,
-    "rate_per_sec": 4172.3
+    "elapsed_sec": 0.51,
+    "rate_per_sec": 3916.7
   },
   "self_test": {
     "passed": true,
