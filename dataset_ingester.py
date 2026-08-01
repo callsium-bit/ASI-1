@@ -105,21 +105,45 @@ class DatasetIngester:
                         if target.split()[0].lower() not in generic:
                             # Gerçek kategori: 2-6 kelime (uzun öbekler gürültü)
                             kelime_sayisi = len(target.split())
-                            # Son kelime bir kategori kelimesi olmalı
-                            kategori_sonlari = (
-                                "dalı","türü","tipi","çeşidi","akımı","sistemi","yöntemi",
-                                "tepkime","kavram","süreç","olgu","kuram","teori","yasa",
-                                "ilke","model","yapı","bilim","sanat","hareket","dönem",
-                                "devlet","imparatorluk","kent","ülke","iklim","bitki",
-                                "hayvan","element","bileşik","alan","bölge","molekül",
-                                "enerji","araç","alet","makine","cihaz","canlı","nesne",
-                                "madde","olay","durum","özellik","işlev","dal","tür",
-                                "tip","çeşit","akım","sistem","yöntem","kuram","ilke"
-                            )
-                            son_kelime = target.split()[-1].lower().rstrip("'")
-                            son_uygun = any(son_kelime.endswith(s) for s in kategori_sonlari)
-                            if 1 <= kelime_sayisi <= 6 and son_uygun:
+                            # SON KELİME KARA LİSTESİ: tek başına kategori DEĞİL
+                            # "Determinant özelliktir" → ANLAMSIZ (hangi özellik?)
+                            # "matematiksel özellik" → OK (niteleyen var)
+                            ZAYIF_SON = {
+                                "özellik","sistem","model","alan","yapı","durum","işlev",
+                                "dal","tür","tip","çeşit","akım","yöntem","kuram","ilke",
+                                "kavram","terim","süreç","olgu","nesne","varlık","madde",
+                                "cisim","parça","bölüm","örnek","gösterge","aralık","ölçek",
+                                "ölçü","sabit","hareket","canlı","araç","alet","makine",
+                                "cihaz","enerji","olay","iş","biçim","hal","şekil","yön",
+                                "değer","sınır","bölge","katman","tabaka","düzey","grup",
+                                "küme","topluluk","birim","unsur","öge","eleman","prensip",
+                                "mekanizma","düzen","kural","kuralı","yasa","kanun","güç",
+                                "kuvvet","etki","sonuç","neden","sebep","amaç","hedef",
+                            }
+                            son_kelime = target.split()[-1].lower().rstrip("'s")
+                            # Tek kelimelik zayıf hedef → reddet
+                            if kelime_sayisi == 1 and son_kelime in ZAYIF_SON:
+                                pass  # kabul etme
+                            elif kelime_sayisi >= 2 and son_kelime in ZAYIF_SON:
+                                # Niteleyen var → kabul (örn: "matematiksel özellik")
                                 relations.append(("isa", subject, target))
+                            else:
+                                # Son kelime kara listede değil → kategori kontrolü
+                                kategori_sonlari = (
+                                    "dalı","türü","tipi","çeşidi","akımı","sistemi","yöntemi",
+                                    "tepkime","kavram","süreç","olgu","kuram","teori","yasa",
+                                    "ilke","model","yapı","bilim","sanat","hareket","dönem",
+                                    "devlet","imparatorluk","kent","ülke","iklim","bitki",
+                                    "hayvan","element","bileşik","alan","bölge","molekül",
+                                    "enerji","araç","alet","makine","cihaz","canlı","nesne",
+                                    "madde","olay","durum","özellik","işlev","dal","tür",
+                                    "tip","çeşit","akım","sistem","yöntem","kuram","ilke",
+                                    "denklem","fonksiyon","teorem","aksiyom","hipotez",
+                                    "yasası","kanunu","kuramı","teorisi","modeli","sistemi",
+                                )
+                                son_uygun = any(son_kelime.endswith(s) for s in kategori_sonlari)
+                                if 1 <= kelime_sayisi <= 6 and son_uygun:
+                                    relations.append(("isa", subject, target))
 
         # ── STRATEJİ 2: Fallback "X ... bir Y'dir" ──
         if not relations:

@@ -534,6 +534,9 @@ class HookEngine:
         for word in words:
             nodes = self.get_hook_nodes(word)
             for n in nodes:
+                # İZOLASYON FİLTRESİ: karantinadaki düğümler sorguya girmez
+                if n.isolated:
+                    continue
                 if n.id not in {m.id for m in matched_nodes}:
                     matched_nodes.append(n)
         return {
