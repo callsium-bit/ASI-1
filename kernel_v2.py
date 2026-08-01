@@ -3916,39 +3916,47 @@ class RelationEngine:
     # ── Modus Ponens: A isa B ∧ B isa C → A isa C ──────────────
     def derive_isa_chain(self, concept: str, max_depth: int = 4) -> List[dict]:
         """Bir kavramın isa zincirini yukarı doğru takip edip yeni türetimler üretir.
-        A isa B ve B isa C varsa, A isa C türetilir (geçişlilik)."""
+        A isa B ve B isa C varsa, A isa C türetilir (geçişlilik).
+        Kaynaklar: kristal düğümler + aksiyomlar (ikisi de taranır)."""
         derived = []
         visited = set()
+
+        def isa_targets(entity: str) -> set:
+            """Bir varlığın isa hedefleri: düğümlerden + aksiyomlardan."""
+            targets = set()
+            n = norm_tr
+            # 1. Kristal düğümler
+            for node in self.kernel.hooks.nodes.values():
+                if node.isolated or n(node.ne) != n(entity):
+                    continue
+                for k, v in node.properties.items():
+                    if k in ("isa", "instance_of", "subclass_of"):
+                        targets.add(str(v))
+            # 2. Aksiyomlar (mavi isa renk → renk isa algisal_ozellik zinciri)
+            for ax in self.kernel.axioms.axioms.values():
+                if ax.predicate in ("isa", "instance_of", "subclass_of") and \
+                   n(ax.subject) == n(entity):
+                    targets.add(ax.object_.split(":")[0])
+            return targets
 
         def walk(current: str, depth: int, path: List[str]):
             if depth > max_depth or current in visited:
                 return
             visited.add(current)
-            # Mevcut düğümün isa hedeflerini bul
-            targets = set()
-            for node in self.kernel.hooks.nodes.values():
-                if node.isolated or norm_tr(node.ne) != norm_tr(current):
-                    continue
-                for k, v in node.properties.items():
-                    if k in ("isa", "instance_of", "subclass_of"):
-                        targets.add(str(v))
+            targets = isa_targets(current)
             for t in targets:
                 # A isa B, B isa C → A isa C
-                for node in self.kernel.hooks.nodes.values():
-                    if node.isolated or norm_tr(node.ne) != norm_tr(t):
+                for upper in isa_targets(t):
+                    if upper in path:
                         continue
-                    for k, v in node.properties.items():
-                        if k in ("isa", "instance_of", "subclass_of") and str(v) not in path:
-                            hypothesis = str(v)
-                            # Aynı bilgi zaten var mı?
-                            if self._relation_exists(concept, "isa", hypothesis):
-                                continue
-                            derived.append({
-                                "subject": concept, "relation": "isa",
-                                "target": hypothesis,
-                                "rule": "modus_ponens",
-                                "chain": path + [t],
-                            })
+                    if self._relation_exists(concept, "isa", upper):
+                        continue
+                    derived.append({
+                        "subject": concept, "relation": "isa",
+                        "target": upper,
+                        "rule": "modus_ponens",
+                        "chain": path + [t],
+                    })
                 walk(t, depth + 1, path + [t])
 
         walk(concept, 0, [concept])
@@ -4007,11 +4015,17 @@ class RelationEngine:
 
     # ── Hipotezleri gate'ten geçirip uygula ─────────────────────
     def apply_hypotheses(self, concept: str, max_depth: int = 3) -> dict:
-        """Türetilen hipotezleri gate'ten geçirir; kabul edilenler kristal olur."""
+        """Türetilen hipotezleri gate'ten geçirir; kabul edilenler kristal olur.
+        FEYNMAN KURALI (konsey): iç tutarlılık yetmez — zıt özellik kontrolü.
+        Örn: "kar hasa hal=kati" varken "kar isa sıvı" türetilemez."""
         hypotheses = self.derive_hypotheses(concept, max_depth)
         accepted = 0
         rejected = 0
         for h in hypotheses:
+            # Zıt özellik kontrolü: subject'in hasa özelliği hedefle çelişiyor mu?
+            if self._zit_ozellik_var(h["subject"], h["target"]):
+                rejected += 1
+                continue
             result = self.add_relation(
                 h["subject"], h["relation"], h["target"],
                 source=f"turetim|{h['rule']}|{'-'.join(h['chain'][-2:])}",
@@ -4027,6 +4041,33 @@ class RelationEngine:
             "accepted": accepted,
             "rejected": rejected,
         }
+
+    # ── Zıt özellik kontrolü ────────────────────────────────────
+    def _zit_ozellik_var(self, subject: str, target: str) -> bool:
+        """Subject'in 'hal' özelliği ile hedef çelişiyorsa True.
+        kar hasa hal=kati, hedef 'sıvı' ise → çelişki."""
+        n = norm_tr
+        # Subject'in hal özelliğini bul
+        subject_hal = None
+        for node in self.kernel.hooks.nodes.values():
+            if node.isolated or n(node.ne) != n(subject):
+                continue
+            for k, v in node.properties.items():
+                if k in ("hal", "durum", "faz"):
+                    subject_hal = n(str(v))
+        if not subject_hal:
+            return False
+        # Hedef bir hal/madde-durumu mu?
+        hal_kelimeleri = {"sivi", "kati", "gaz", "plazma", "sıvı", "katı", "gaz"}
+        target_n = n(target)
+        hedef_hal = None
+        for w in target_n.split():
+            if w in hal_kelimeleri:
+                hedef_hal = w
+                break
+        if hedef_hal and subject_hal != hedef_hal:
+            return True
+        return False
 
     # ── Yardımcılar ─────────────────────────────────────────────
     def _relation_exists(self, subject: str, rel_type: str, target: str) -> bool:
