@@ -6,3 +6,13 @@ venv/
 .env
 .DS_Store
 *.log
+# Büyük veri setleri (GitHub'a push edilmez — lokal diskte durur)
+veri/*.jsonl
+veri/bella_akademik/
+veri/turkish-wiki-qa.jsonl
+veri/wiki_tr_ilk_cumleler.jsonl
+veri/wiki_tr_v2.jsonl
+knowledge_store.json
+knowledge_store_v0.1.json
+gece_raporu.json
+.gece_tur.json
