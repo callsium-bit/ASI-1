@@ -1239,7 +1239,12 @@ class ASIKernel:
         norm_words = words
         zaman_tetik = {"saat", "tarih", "bugün", "zaman", "dakika"}
         hesap_tetik = {"kaç", "eder", "çarp", "böl", "topla", "çıkar", "kare", "küp", "hesapla"}
-        if zaman_tetik & norm_words and not any(w.isdigit() for w in norm_words):
+        # "nedir" sorusu = kavram sorusu → zaman aracı DEVREDE DEĞİL
+        # (örn: "Orta Çağ Tarihi nedir?" ≠ zaman sorusu)
+        is_concept_question = any(norm(w) in {"nedir", "kimdir", "neymiş"} for w in norm_words)
+        # "saat/tarih/bugün" NET zaman işareti → "kaç" hesap olsa bile zaman kazanır
+        net_zaman = {"saat", "tarih", "bugün", "zaman", "dakika"} & norm_words
+        if net_zaman and not any(w.isdigit() for w in norm_words) and not is_concept_question:
             tool_result = self.tools.call(question)
             if tool_result.get("tool") != "zaman_sor":
                 tool_result = None
@@ -3883,7 +3888,7 @@ class ToolRegistry:
         Öncelik sırası: en çok eşleşen araç kazanır.
         """
         norm = AxiomEngine._normalize_tr
-        words = set(norm(w) for w in question.lower().split())
+        words = set(norm(w) for w in question.lower().strip('?.').split())
         best_tool, best_score = None, 0
         for tool in self.tools.values():
             score = 0
@@ -3893,7 +3898,8 @@ class ToolRegistry:
                     score += 2  # tam kelime eşleşmesi
                 elif any(t_norm in w for w in words if len(w) > 3):
                     score += 1  # kısmi eşleşme (örn: "kaçtır" içinde "kaç")
-            if score > best_score:
+            # Beraberlikte zaman_sor önceliklidir (saat kaç? vs 7 çarpı kaç?)
+            if score > best_score or (score == best_score and tool["name"] == "zaman_sor"):
                 best_tool, best_score = tool, score
         return best_tool if best_score > 0 else None
 
