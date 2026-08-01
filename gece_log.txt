@@ -6,3 +6,13 @@
 [02:04:33] 💾 Kaydedildi: 2650 düğüm (+62)
 [02:04:33] 🧪 Çekirdek: OK — Hayir, Mavi düşemez. Mavi algisal bir özelliktir (renk), fiz
 [02:04:33] 📊 Tur 1 tamam: +62 düğüm → 2650
+[02:18:01] 🚀 Gece operasyonu başladı
+[02:18:01] 📥 Kaynak: genel_kultur (limit 3000)
+[02:20:48] 🚀 Gece operasyonu başladı
+[02:20:48] 📥 Kaynak: wiki_tr_v2 (limit 2000)
+[02:20:48]    +0 kabul, 0 tekrar
+[02:20:48] 🧠 Türetim başlıyor...
+[02:20:56]    150 kavram, +0 türetim
+[02:20:56] 💾 Kaydedildi: 2650 düğüm (+0)
+[02:20:56] 🧪 Çekirdek: OK — Hayir, Mavi düşemez. Mavi algisal bir özelliktir (renk), fiz
+[02:20:56] 📊 Tur 3 tamam: +0 düğüm → 2650

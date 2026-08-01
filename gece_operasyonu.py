@@ -70,12 +70,17 @@ def main():
         ("5n1k_temiz", os.path.join(os.path.expanduser("~"), "Desktop", "5n1k_temiz_59k.jsonl"), 3000),
         ("genel_kultur", os.path.join(os.path.expanduser("~"), "Desktop", "genel_kultur_5n1k.jsonl"), 3000),
         ("wiki_tr_v2", os.path.join(SCRIPT_DIR, "veri", "wiki_tr_v2.jsonl"), 2000),
+        ("bella_akademik", os.path.join(SCRIPT_DIR, "veri", "bella_akademik", "dergi_.jsonl"), 2000),
     ]
     secilen = kaynaklar[(tur - 1) % len(kaynaklar)]
     isim, yol, limit = secilen
     log(f"📥 Kaynak: {isim} (limit {limit})")
     try:
-        sonuc = ing.ingest_jsonl(yol, limit=limit)
+        if isim == "bella_akademik":
+            # BellaTurca: text alanından isa çıkarımı (sıkı filtreli)
+            sonuc = ing.ingest_jsonl(yol, limit=limit, field="text")
+        else:
+            sonuc = ing.ingest_jsonl(yol, limit=limit)
         rapor["kaynak"] = isim
         rapor["kabul"] = sonuc.get("accepted", 0)
         rapor["tekrar"] = sonuc.get("duplicates", 0)
