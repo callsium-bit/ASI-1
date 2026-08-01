@@ -1234,6 +1234,9 @@ class ASIKernel:
         # Aşama 9: Araç kütüphanesi (fonksiyon çağırma)
         self.tools = ToolRegistry(self)
 
+        # Aşama 10: Sohbet katmanı (bağlam + görev + vektör)
+        self.chat = None  # geç başlatma — ChatEngine modül sonunda tanımlı
+
         # Kalıcı hafıza: varsa yükle, yoksa tohum veri ile başla
         loaded = False
         if auto_load and KnowledgeStore.exists(knowledge_path):
@@ -4916,3 +4919,229 @@ if __name__ == "__main__":
         print("   python kernel_v2.py --gaps                → Boşlukları listele")
         print("   python kernel_v2.py --web-ingest KAVRAM   → Web'den bilgi çek (LLM)")
         print("   python kernel_v2.py --web-loop [N]        → Kesintisiz web döngüsü (LLM)")
+        print("   python kernel_v2.py --chat                → Sohbet modu (bağlam + görev + vektör)")
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AŞAMA 10: SOHBET KATMANI — Bağlam + Görev Takibi + Vektör Uzayı
+# Kullanıcı: "sözlük gibi çalışıyor, uzun sohbet yapamaz, iş takibi yapamaz"
+# Bu katman: konuşma bağlamı, görev hafızası, embedding benzerliği (LLM'siz)
+# ═══════════════════════════════════════════════════════════════════
+
+class VectorSpace:
+    """Hashed n-gram vektörü (256 boyut) + cosine benzerliği — saf Python, LLM'siz."""
+
+    BOYUT = 256
+
+    def __init__(self):
+        self._vector_cache: dict = {}
+
+    def embed(self, metin: str) -> List[float]:
+        metin = norm_tr(metin).strip()
+        if not metin:
+            return [0.0] * self.BOYUT
+        if metin in self._vector_cache:
+            return self._vector_cache[metin]
+        v = [0.0] * self.BOYUT
+        for n in (2, 3):
+            for i in range(len(metin) - n + 1):
+                gram = metin[i:i + n]
+                h = hash(gram) % self.BOYUT
+                v[h] += 1.0
+        norm = sum(x * x for x in v) ** 0.5
+        if norm > 0:
+            v = [x / norm for x in v]
+        self._vector_cache[metin] = v
+        return v
+
+    def cosine(self, a: List[float], b: List[float]) -> float:
+        return sum(x * y for x, y in zip(a, b))
+
+    def benzerlik(self, s1: str, s2: str) -> float:
+        return self.cosine(self.embed(s1), self.embed(s2))
+
+    def en_yakin(self, sorgu: str, adaylar: List[str], esik: float = 0.3,
+                 limit: int = 5) -> List[tuple]:
+        qv = self.embed(sorgu)
+        sonuclar = []
+        for a in adaylar:
+            s = self.cosine(qv, self.embed(a))
+            if s >= esik:
+                sonuclar.append((s, a))
+        sonuclar.sort(reverse=True)
+        return sonuclar[:limit]
+
+
+class ConversationMemory:
+    """Sohbet bağlamı: son N mesajı tutar, geçmişe dönük soruları cevaplar."""
+
+    def __init__(self, max_turns: int = 10):
+        self.history: List[dict] = []
+        self.max_turns = max_turns
+        self.vektor = VectorSpace()
+
+    def ekle(self, rol: str, mesaj: str) -> None:
+        self.history.append({"rol": rol, "mesaj": mesaj, "zaman": time.time()})
+        if len(self.history) > self.max_turns * 2:
+            self.history = self.history[-self.max_turns * 2:]
+
+    def son(self, n: int = 5) -> List[dict]:
+        return self.history[-n:]
+
+    def ozet(self) -> str:
+        if not self.history:
+            return "Henüz konuşma yok."
+        satirlar = []
+        for h in self.history[-6:]:
+            isim = "Sen" if h["rol"] == "user" else "ASI-1"
+            satirlar.append(f"{isim}: {h['mesaj'][:120]}")
+        return "\n".join(satirlar)
+
+    def gecmis_sorgusu(self, soru: str) -> Optional[dict]:
+        n = norm_tr(soru)
+        if not any(k in n for k in ("ne demi", "ne konus", "az once", "ne soyled",
+                                    "hatirliyor", "ne yaptik")):
+            return None
+        if not self.history:
+            return {"cevap": "Henüz konuşma geçmişi yok — daha önce hiç konuşmadık."}
+        son_user = None
+        for h in reversed(self.history):
+            if h["rol"] == "user":
+                son_user = h
+                break
+        if son_user:
+            return {"cevap": f"Az önce şunu sormuştun: \"{son_user['mesaj'][:100]}\"",
+                    "kaynak": "gecmis"}
+        return {"cevap": self.ozet(), "kaynak": "gecmis"}
+
+
+class TaskMemory:
+    """Görev takibi: 'şunu hatırla', 'yarın yap', 'görevlerim neler'."""
+
+    def __init__(self):
+        self.gorevler: List[dict] = []
+        self._next_id = 1
+
+    def algila(self, mesaj: str) -> Optional[dict]:
+        n = norm_tr(mesaj)
+        if any(k in n for k in ("gorevlerim", "gorevler neler", "yapilacaklar", "hatirlatm")):
+            return {"tur": "listele"}
+        # ÖNCE kapat: "X'i unut", "X'i sil", "X görevini unut"
+        if "sil" in n or ("un" in n and "ut" in n):
+            # İlk anlamlı kelimeyi ara: "ekmek görevini unut" → "ekmek"
+            metin = self._ilk_kelime(mesaj)
+            if metin:
+                return {"tur": "kapat", "metin": metin}
+        # SONRA ekle: "X'i hatırla", "X'i unutma", "X'i yap"
+        for kalip in ("hatirla", "unutm", "yapacaksin"):
+            if kalip in n:
+                metin = self._icerik_cek(mesaj, kalip)
+                if metin:
+                    return {"tur": "ekle", "metin": metin}
+        return None
+
+    def _ilk_kelime(self, mesaj: str) -> str:
+        """Kapatma için: mesajın ilk anlamlı kelimesi."""
+        parcalar = mesaj.split()
+        for p in parcalar:
+            temiz = p.strip(".,!?;:'")
+            if len(temiz) >= 3:
+                return temiz
+        return ""
+
+    def _icerik_cek(self, mesaj: str, anahtar: str) -> str:
+        n = norm_tr(mesaj)
+        anahtar_n = norm_tr(anahtar)
+        idx = n.find(anahtar_n)
+        if idx <= 0:
+            return ""
+        icerik = mesaj[:idx].strip().rstrip("'iınıüüoöçş ")
+        return icerik if 2 <= len(icerik) <= 200 else ""
+
+    def ekle(self, metin: str) -> dict:
+        g = {"id": self._next_id, "metin": metin, "durum": "acik", "zaman": time.time()}
+        self.gorevler.append(g)
+        self._next_id += 1
+        return g
+
+    def kapat(self, metin: str) -> bool:
+        n = norm_tr(metin)
+        for g in self.gorevler:
+            if g["durum"] == "acik" and n in norm_tr(g["metin"]):
+                g["durum"] = "kapali"
+                return True
+        return False
+
+    def liste(self) -> List[dict]:
+        return [g for g in self.gorevler if g["durum"] == "acik"]
+
+    def format_liste(self) -> str:
+        acik = self.liste()
+        if not acik:
+            return "Açık görevin yok. 'X'i hatırla diyerek ekleyebilirsin."
+        satirlar = [f"{g['id']}. {g['metin']}" for g in acik]
+        return "\n".join(satirlar)
+
+
+class ChatEngine:
+    """Sohbet orkestratörü: bağlam + görev + vektör + kernel'i birleştirir."""
+
+    def __init__(self, kernel):
+        self.kernel = kernel
+        self.baglam = ConversationMemory()
+        self.gorevler = TaskMemory()
+        self.vektor = VectorSpace()
+
+    def sohbet(self, mesaj: str) -> dict:
+        gorev = self.gorevler.algila(mesaj)
+        if gorev:
+            if gorev["tur"] == "listele":
+                cevap = self.gorevler.format_liste()
+            elif gorev["tur"] == "ekle":
+                g = self.gorevler.ekle(gorev["metin"])
+                cevap = f"✅ Hatırladım: \"{g['metin']}\" ({g['id']})"
+            else:
+                ok = self.gorevler.kapat(gorev["metin"])
+                cevap = (f"✅ \"{gorev['metin']}\" kapatıldı." if ok
+                         else f"\"{gorev['metin']}\" bulunamadı.")
+            self.baglam.ekle("user", mesaj)
+            self.baglam.ekle("asi", cevap)
+            return {"cevap": cevap, "kanal": "gorev"}
+
+        gecmis = self.baglam.gecmis_sorgusu(mesaj)
+        if gecmis:
+            self.baglam.ekle("user", mesaj)
+            self.baglam.ekle("asi", gecmis["cevap"])
+            return {"cevap": gecmis["cevap"], "kanal": "gecmis"}
+
+        vektor_sonuc = self._vektor_esle(mesaj)
+        kernel_cevap = self.kernel.ask(mesaj)
+        cevap = str(kernel_cevap.get("answer", kernel_cevap))
+
+        self.baglam.ekle("user", mesaj)
+        self.baglam.ekle("asi", cevap)
+        return {"cevap": cevap, "kanal": "kernel", "vektor_eslesme": vektor_sonuc}
+
+    def _vektor_esle(self, mesaj: str) -> Optional[dict]:
+        kavramlar = []
+        gorulen = set()
+        for node in self.kernel.hooks.nodes.values():
+            if node.isolated or node.ne in gorulen:
+                continue
+            gorulen.add(node.ne)
+            kavramlar.append(node.ne)
+        n = norm_tr(mesaj)
+        if len(n) < 8:
+            return None
+        eslesmeler = self.vektor.en_yakin(mesaj, kavramlar[:2000], esik=0.35, limit=3)
+        if eslesmeler:
+            return [{"kavram": k, "benzerlik": round(s, 3)} for s, k in eslesmeler]
+        return None
+
+    def durum(self) -> dict:
+        return {
+            "baglam_turn": len(self.baglam.history) // 2,
+            "gorev_acik": len(self.gorevler.liste()),
+            "gorev_toplam": len(self.gorevler.gorevler),
+            "vektor_ornek_sayi": len(self.vektor._vector_cache),
+        }
