@@ -244,6 +244,42 @@ def run_cycle():
         log(f"⚠️ Dataset işleme hatası: {e}")
         report["dataset_error"] = str(e)
 
+    # 7. 🧪 OTO-TEST: sistem sağlık kontrolü
+    try:
+        import subprocess
+        test_result = subprocess.run(
+            [sys.executable, os.path.join(SCRIPT_DIR, "test_asi.py")],
+            capture_output=True, text=True, timeout=90
+        )
+        tests_ok = "40/40" in test_result.stdout
+        report["self_test"] = {
+            "passed": tests_ok,
+            "exit_code": test_result.returncode,
+            "tail": (test_result.stdout or test_result.stderr)[-300:]
+        }
+        log(f"🧪 Oto-test: {'✅ 40/40 GEÇTİ' if tests_ok else '❌ BAŞARISIZ!'}")
+        if not tests_ok:
+            log(f"   Hata çıktısı: {(test_result.stdout or test_result.stderr)[-200:]}")
+    except Exception as e:
+        report["self_test"] = {"passed": False, "error": str(e)}
+        log(f"⚠️ Oto-test çalıştırılamadı: {e}")
+
+    # 8. 💾 Oto-test sonrası tekrar kaydet (öğrenilenler korunsun)
+    try:
+        kernel.save_knowledge()
+        report["saved_final"] = True
+    except Exception:
+        report["saved_final"] = False
+
+    # Son durum raporunu yaz
+    report["final_state"] = kernel.get_status()
+    try:
+        with open(REPORT_FILE, 'w', encoding='utf-8') as f:
+            json.dump(report, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+    log("📊 Rapor: autopilot_report.json")
+
     return report
 
 if __name__ == "__main__":
