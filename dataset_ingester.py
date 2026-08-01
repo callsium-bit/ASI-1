@@ -200,9 +200,15 @@ class DatasetIngester:
                     five = record["5n1k"]
                     text = five.get("ne", "")
                     subject_hint = record.get("konu", "")
-                    # NOT: 5N1K'nın nerede/zaman/neden alanları çok varyasyonlu —
-                    # aynı subject için farklı değerler çelişki yaratıyor.
-                    # Sadece "isa" (kesin tanım) kullanılır.
+                    # İLİŞKİ GENİŞLETME (konsey kararı): 5N1K alanları → ilişki türleri
+                    # nerede → located_in, neden → causes, kim → invented_by
+                    # Kısa değerler (<80 karakter) güvenli; uzunlar varyasyon yaratıyor
+                    if subject_hint:
+                        from kernel_v2 import FIELD_TO_RELATION
+                        for alan, rel in FIELD_TO_RELATION.items():
+                            deger = five.get(alan, "").strip()
+                            if deger and 3 < len(deger) <= 80:
+                                self._process_relation(subject_hint, rel, deger)
                 elif "messages" in record:
                     # Chat formatı: son assistant cevabı
                     for msg in record["messages"]:
@@ -247,7 +253,10 @@ class DatasetIngester:
         Dataset bilgisi temiz kaynaktan geldiği için FastPath'e gerek yok:
         gate dedup + contradiction kontrolü yapar, çelişkisiz olanı kabul eder.
         """
-        props = {prop or "isa": target}
+        props = {rel_type if rel_type in ("isa", "instance_of", "subclass_of",
+                                          "part_of", "used_for", "causes",
+                                          "located_in", "invented_by",
+                                          "has_property") else (prop or "isa"): target}
         gate = self.kernel.contradictions.gate(
             ne=subject, properties=props,
             source=f"dataset|{rel_type}",

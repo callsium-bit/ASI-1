@@ -709,10 +709,13 @@ class ContradictionEngine:
                 return result
 
         # Adım 3: Mevcut kristal düğümlerle çelişki (esnek property eşleştirme)
+        # NOT: "isa/instance_of/subclass_of" çoklu üyelik — bir şey hem Memeli
+        # hem Hayvan olabilir. Sadece TİP çakışması (algısal vs fiziksel) ret.
         if object_:
             norm = self.axioms._normalize_tr
             pred_norm = norm(predicate)
             obj_norm = norm(object_)
+            coklu_uyelik = predicate in ("isa", "instance_of", "subclass_of")
             existing = self.hooks.search_5n1k(ne=subject)
             for node in existing:
                 for pname, pval in node.properties.items():
@@ -723,6 +726,9 @@ class ContradictionEngine:
                                       pred_norm in pname_norm or
                                       pname_norm in pred_norm)
                     if is_related_prop and pval_norm != obj_norm:
+                        # Çoklu sınıf üyeliği çelişki değil (hiyerarşi olabilir)
+                        if coklu_uyelik:
+                            continue
                         result["accepted"] = False
                         result["conflicts"].append({
                             "type": "deger_celiski",
@@ -1180,6 +1186,7 @@ class ASIKernel:
         self.associations = FreeAssociationEngine(self.hooks)
         self.decoder = DecoderEngine(mode=decoder_mode)
         self.parser = TurkishParser()
+        self.relations = RelationEngine(self)
         self.conversation_log: List[dict] = []
         self._knowledge_path = knowledge_path
 
@@ -3246,9 +3253,13 @@ class FastPathValidator:
 
             # Mevcut düğümlerle çelişki kontrolü
             existing_nodes = self.hooks.search_5n1k(ne=concept)
+            coklu_uyelik = rel_type in ("isa", "instance_of", "subclass_of")
             for node in existing_nodes:
                 for pn, pv in node.properties.items():
                     if norm(pn) == norm(prop) and norm(str(pv)) != norm(str(value)):
+                        # Çoklu sınıf üyeliği çelişki değil (Memeli hem Hayvan olabilir)
+                        if coklu_uyelik:
+                            continue
                         self.stats["fast_rejected"] += 1
                         return {
                             "verdict": "rejected",
@@ -3844,6 +3855,197 @@ class AttentionRouter:
             "focus_stats": focus_stats,
             "active_node_ids": list(active_set)[:20],
         }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AŞAMA 8b: RelationEngine — İlişki Cebri + Modus Ponens Türetimi
+# Konsey kararı (2026-08-02): isa tekeli ölümcül. Çok ilişkili grafa geçiş.
+# Türetim kuralları (eğitimsiz, saf sembolik):
+#   modus_ponens: A isa B ∧ B isa C → A isa C (zincir türetimi)
+#   subclass:     A isa B → B hasa alt_türü A (tersi)
+#   hipotez:      A part_of B ∧ B part_of C → A part_of C (geçişlilik)
+# ═══════════════════════════════════════════════════════════════════
+
+RELATION_TYPES = {
+    "isa":           {"gecisli": True,  "ters": "alt_turu",      "aciklama": "sınıf üyeliği"},
+    "instance_of":   {"gecisli": True,  "ters": "ornekleri",      "aciklama": "somut örnek"},
+    "subclass_of":   {"gecisli": True,  "ters": "alt_sinifi",     "aciklama": "alt sınıf"},
+    "part_of":       {"gecisli": True,  "ters": "parcalari",      "aciklama": "parça-bütün"},
+    "used_for":      {"gecisli": False, "ters": "kullanicilari",  "aciklama": "araç-amaç"},
+    "causes":        {"gecisli": True,  "ters": "nedenleri",      "aciklama": "neden-sonuç"},
+    "located_in":    {"gecisli": True,  "ters": "icerikleri",     "aciklama": "konum"},
+    "invented_by":   {"gecisli": False, "ters": "icatlari",       "aciklama": "icat eden"},
+    "has_property":  {"gecisli": False, "ters": "sahipleri",      "aciklama": "özellik"},
+}
+
+# Türkçe 5N1K alanı → ilişki türü eşlemesi
+FIELD_TO_RELATION = {
+    "nerede": "located_in",
+    "ne_zaman": "has_property",   # zaman özelliği
+    "neden": "causes",
+    "nasil": "has_property",
+    "kim": "invented_by",
+}
+
+
+class RelationEngine:
+    """Çok ilişkili bilgi grafi + deterministik türetim kuralları (LLM'siz)."""
+
+    def __init__(self, kernel: 'ASIKernel'):
+        self.kernel = kernel
+        self.derived_count = 0
+        self.derived_log: List[dict] = []
+
+    # ── İlişki yazma (gate'ten geçer) ──────────────────────────
+    def add_relation(self, subject: str, rel_type: str, target: str,
+                     source: str = "relation_engine", confidence: float = 0.8) -> dict:
+        """İlişkiyi gate'ten geçirip kristal düğüme yazar."""
+        if rel_type not in RELATION_TYPES:
+            return {"accepted": False, "reason": f"Bilinmeyen ilişki türü: {rel_type}"}
+        gate = self.kernel.contradictions.gate(
+            ne=subject, properties={rel_type: target},
+            source=source, confidence=confidence
+        )
+        return {
+            "accepted": gate["accepted"],
+            "node_id": gate["node_id"],
+            "is_duplicate": gate.get("is_duplicate", False),
+            "relation": rel_type,
+        }
+
+    # ── Modus Ponens: A isa B ∧ B isa C → A isa C ──────────────
+    def derive_isa_chain(self, concept: str, max_depth: int = 4) -> List[dict]:
+        """Bir kavramın isa zincirini yukarı doğru takip edip yeni türetimler üretir.
+        A isa B ve B isa C varsa, A isa C türetilir (geçişlilik)."""
+        derived = []
+        visited = set()
+
+        def walk(current: str, depth: int, path: List[str]):
+            if depth > max_depth or current in visited:
+                return
+            visited.add(current)
+            # Mevcut düğümün isa hedeflerini bul
+            targets = set()
+            for node in self.kernel.hooks.nodes.values():
+                if node.isolated or norm_tr(node.ne) != norm_tr(current):
+                    continue
+                for k, v in node.properties.items():
+                    if k in ("isa", "instance_of", "subclass_of"):
+                        targets.add(str(v))
+            for t in targets:
+                # A isa B, B isa C → A isa C
+                for node in self.kernel.hooks.nodes.values():
+                    if node.isolated or norm_tr(node.ne) != norm_tr(t):
+                        continue
+                    for k, v in node.properties.items():
+                        if k in ("isa", "instance_of", "subclass_of") and str(v) not in path:
+                            hypothesis = str(v)
+                            # Aynı bilgi zaten var mı?
+                            if self._relation_exists(concept, "isa", hypothesis):
+                                continue
+                            derived.append({
+                                "subject": concept, "relation": "isa",
+                                "target": hypothesis,
+                                "rule": "modus_ponens",
+                                "chain": path + [t],
+                            })
+                walk(t, depth + 1, path + [t])
+
+        walk(concept, 0, [concept])
+        self.derived_count += len(derived)
+        self.derived_log.extend(derived)
+        return derived
+
+    # ── Geçişlilik: A part_of B ∧ B part_of C → A part_of C ────
+    def derive_transitive(self, concept: str, rel_type: str = "part_of",
+                          max_depth: int = 4) -> List[dict]:
+        """Geçişli ilişkilerde (part_of, located_in, causes) zincir türetimi."""
+        if not RELATION_TYPES.get(rel_type, {}).get("gecisli"):
+            return []
+        derived = []
+        visited = set()
+
+        def walk(current: str, depth: int, path: List[str]):
+            if depth > max_depth or current in visited:
+                return
+            visited.add(current)
+            targets = set()
+            for node in self.kernel.hooks.nodes.values():
+                if node.isolated or norm_tr(node.ne) != norm_tr(current):
+                    continue
+                for k, v in node.properties.items():
+                    if k == rel_type:
+                        targets.add(str(v))
+            for t in targets:
+                for node in self.kernel.hooks.nodes.values():
+                    if node.isolated or norm_tr(node.ne) != norm_tr(t):
+                        continue
+                    for k, v in node.properties.items():
+                        if k == rel_type and str(v) not in path:
+                            if not self._relation_exists(concept, rel_type, str(v)):
+                                derived.append({
+                                    "subject": concept, "relation": rel_type,
+                                    "target": str(v), "rule": "gecislilik",
+                                    "chain": path + [t],
+                                })
+                walk(t, depth + 1, path + [t])
+
+        walk(concept, 0, [concept])
+        self.derived_count += len(derived)
+        self.derived_log.extend(derived)
+        return derived
+
+    # ── Tüm türetimler (hipotez üretimi) ────────────────────────
+    def derive_hypotheses(self, concept: str, max_depth: int = 3) -> List[dict]:
+        """Kavram için tüm türetilebilir hipotezleri üret (gate'ten geçirilir)."""
+        hypotheses = []
+        hypotheses.extend(self.derive_isa_chain(concept, max_depth))
+        hypotheses.extend(self.derive_transitive(concept, "part_of", max_depth))
+        hypotheses.extend(self.derive_transitive(concept, "located_in", max_depth))
+        hypotheses.extend(self.derive_transitive(concept, "causes", max_depth))
+        return hypotheses
+
+    # ── Hipotezleri gate'ten geçirip uygula ─────────────────────
+    def apply_hypotheses(self, concept: str, max_depth: int = 3) -> dict:
+        """Türetilen hipotezleri gate'ten geçirir; kabul edilenler kristal olur."""
+        hypotheses = self.derive_hypotheses(concept, max_depth)
+        accepted = 0
+        rejected = 0
+        for h in hypotheses:
+            result = self.add_relation(
+                h["subject"], h["relation"], h["target"],
+                source=f"turetim|{h['rule']}|{'-'.join(h['chain'][-2:])}",
+                confidence=0.7
+            )
+            if result["accepted"]:
+                accepted += 1
+            else:
+                rejected += 1
+        return {
+            "concept": concept,
+            "hypotheses": len(hypotheses),
+            "accepted": accepted,
+            "rejected": rejected,
+        }
+
+    # ── Yardımcılar ─────────────────────────────────────────────
+    def _relation_exists(self, subject: str, rel_type: str, target: str) -> bool:
+        norm = norm_tr
+        for node in self.kernel.hooks.nodes.values():
+            if node.isolated or norm(node.ne) != norm(subject):
+                continue
+            for k, v in node.properties.items():
+                if k == rel_type and norm(str(v)) == norm(target):
+                    return True
+        return False
+
+    def get_stats(self) -> dict:
+        return {"derived_count": self.derived_count, "derived_log": self.derived_log[-20:]}
+
+
+def norm_tr(s: str) -> str:
+    """Global Türkçe normalizasyon yardımcısı."""
+    return s.lower().translate(str.maketrans("ğĞşŞıİüÜöÖçÇ", "gGsSiIuUoOcC"))
 
 
 # ═══════════════════════════════════════════════════════════════════
