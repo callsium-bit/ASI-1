@@ -1,0 +1,20 @@
+{
+ "turlar": [],
+ "baslangic": "2026-08-02T02:04:33.033421",
+ "tur_1": {
+  "tur": 1,
+  "zaman": "2026-08-02T02:03:24.470852",
+  "kaynak": "5n1k_temiz",
+  "kabul": 62,
+  "tekrar": 3030,
+  "turetim": {
+   "kavram": 150,
+   "hipotez": 1,
+   "kabul": 0,
+   "ret": 1
+  },
+  "dugum_toplam": 2650,
+  "dugum_artis": 62,
+  "cekirdek_ok": true
+ }
+}

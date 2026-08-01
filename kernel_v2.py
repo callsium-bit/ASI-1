@@ -92,6 +92,10 @@ class Axiom:
     predicate: str          # "isa", "hasa", "yapamaz", "nedenidir"
     object_: str
     priority: int = 100
+    # V0.3: Sürümlü aksiyom revizyonu (konsey: Meadows DEALBREAKER)
+    version: int = 1
+    revoked: bool = False            # True = iptal edilmiş, artık geçerli değil
+    revision_history: List[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -101,7 +105,10 @@ class Axiom:
             "subject": self.subject,
             "predicate": self.predicate,
             "object": self.object_,
-            "priority": self.priority
+            "priority": self.priority,
+            "version": self.version,
+            "revoked": self.revoked,
+            "revision_history": self.revision_history,
         }
 
 
@@ -300,6 +307,37 @@ class AxiomEngine:
                 if len(obj_parts) == 2 and self._normalize_tr(obj_parts[0]) == prop_norm:
                     return obj_parts[1]
         return None
+
+    # ── V0.3: Sürümlü aksiyom revizyonu (konsey: Meadows DEALBREAKER) ──
+    def revoke_axiom(self, axiom_id: str, reason: str = "") -> bool:
+        """Aksiyomu iptal et (artık geçerli değil)."""
+        ax = self.axioms.get(axiom_id)
+        if not ax:
+            return False
+        ax.revoked = True
+        ax.revision_history.append(f"REVOKE v{ax.version}: {reason}")
+        return True
+
+    def revise_axiom(self, axiom_id: str, new_object: str = None,
+                     new_priority: int = None, reason: str = "") -> bool:
+        """Aksiyomu yeni sürümle değiştir (eski sürüm geçmişte kalır)."""
+        ax = self.axioms.get(axiom_id)
+        if not ax or ax.revoked:
+            return False
+        ax.version += 1
+        ax.revision_history.append(
+            f"v{ax.version}: object='{ax.object_}'→'{new_object or ax.object_}' ({reason})"
+        )
+        if new_object is not None:
+            ax.object_ = new_object
+            ax.statement = f"{ax.subject} {ax.predicate} {new_object}"
+        if new_priority is not None:
+            ax.priority = new_priority
+        return True
+
+    def get_active_axioms(self) -> List[Axiom]:
+        """İptal edilmemiş tüm aksiyomlar."""
+        return [ax for ax in self.axioms.values() if not ax.revoked]
 
     def check_against_axioms(self, subject: str, predicate: str,
                               object_: str = "", relation: str = "isa") -> List[dict]:

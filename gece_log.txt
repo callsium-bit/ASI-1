@@ -1,0 +1,8 @@
+[02:03:24] 🚀 Gece operasyonu başladı
+[02:03:24] 📥 Kaynak: 5n1k_temiz (limit 3000)
+[02:04:25]    +62 kabul, 3030 tekrar
+[02:04:25] 🧠 Türetim başlıyor...
+[02:04:32]    150 kavram, +0 türetim
+[02:04:33] 💾 Kaydedildi: 2650 düğüm (+62)
+[02:04:33] 🧪 Çekirdek: OK — Hayir, Mavi düşemez. Mavi algisal bir özelliktir (renk), fiz
+[02:04:33] 📊 Tur 1 tamam: +62 düğüm → 2650
