@@ -7,7 +7,7 @@ Modlar:
   test       → Tüm testleri çalıştır (18 test)
   ask        → İnteraktif soru-cevap modu
   gaps       → Hafızadaki boşlukları listele
-  distill    → LLM ile kavram damıtma (LM Studio gerekir)
+  distill    → LLM ile kavram damıtma (yerel LLM gerekir)
   web        → Web'den bilgi çekme (Wikipedia + LLM)
   web-loop   → Kesintisiz web döngüsü
   gui        → PySide6 kontrol paneli
@@ -26,7 +26,7 @@ PYTHON = SYSTEM_PYTHON if os.path.exists(SYSTEM_PYTHON) else sys.executable
 KERNEL = os.path.join(SCRIPT_DIR, "kernel_v2.py")
 GUI = os.path.join(SCRIPT_DIR, "gui.py")
 
-# LM Studio ayarları
+# Yerel LLM ayarları
 ENDPOINT = "http://localhost:PORT/v1/chat/completions"
 MODEL = ""  # Otomatik keşfedilecek
 
@@ -99,7 +99,7 @@ MODLAR:
   test        → 18 testi çalıştır
   ask         → İnteraktif soru-cevap (Mavi düşer mi?)
   gaps        → Hafıza boşluklarını listele
-  distill     → LLM ile kavram damıt (LM Studio gerekir)
+  distill     → LLM ile kavram damıt (yerel LLM gerekir)
   web         → Web'den tek kavram çek (Wikipedia + LLM)
   web-loop    → Kesintisiz web bilgi çekme döngüsü
   gui         → PySide6 kontrol paneli

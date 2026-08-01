@@ -31,7 +31,7 @@ Sıfır bağımlılıkla çalışan, aksiyom tabanlı, kendi kendine web'den ö�
 | A3 | Çelişki tespiti, izole alan, serbest çağrışım | Yok |
 | A4 | İç mantığı doğal Türkçe'ye çevirme | Yok |
 | A5 | Küçük LLM'den bilgi damıtma (öner → onayla) | Yerel LLM (kapalı) |
-| A6 | Wikipedia → LLM → Aksiyom → Kristal Düğüm döngüsü | LM Studio |
+| A6 | Wikipedia → LLM → Aksiyom → Kristal Düğüm döngüsü | Yerel LLM (kapalı) |
 
 ---
 
@@ -66,7 +66,7 @@ python run.py ask
 
 ---
 
-## 🌐 Web'den Öğrenme (LM Studio gerekir)
+## 🌐 Web'den Öğrenme (yerel LLM isteğe bağlı)
 
 ```bash
 # Tek kavram: Wikipedia → yerel LLM → Aksiyom → Kristal
