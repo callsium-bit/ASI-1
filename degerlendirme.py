@@ -30,10 +30,10 @@ print(f'    isa oranı: %{isa_oran*100:.1f} {"(SÖZLÜK TEHLİKESİ)" if isa_ora
 # ── 2. Çekirdek aksiyom testi ──
 print(f'\n[2] ÇEKİRDEK AKSİYOMLAR')
 cekirdek = [
-    'Mavi duser mi?',
-    'Yagmurda mavi duser mi?',
-    'Islanan sey mavi olur mu?',
     'Tas ucar mi?',
+    'Ses gorunur mu?',
+    'Kitap icilir mi?',
+    'Ruzgar yutulabilir mi?',
 ]
 for s in cekirdek:
     r = k.ask(s)
