@@ -1361,20 +1361,28 @@ class ASIKernel:
                         }
 
                 # 1b. KISMI EŞLEŞME: expr, düğüm adının bir parçasıysa
+                # (kelime sınırlı — "minotor" içindeki "i" veya "san" eşleşmesin)
                 if not expr_nodes:
                     expr_norm = norm(expr)
-                    for node in self.hooks.nodes.values():
-                        if node.isolated:
-                            continue
-                        if expr_norm in norm(node.ne) or norm(node.ne) in expr_norm:
-                            props = node.properties
-                            if "isa" in props:
-                                return {
-                                    "question": question, "entity": node.ne,
-                                    "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
-                                    "source": node.source, "confidence": node.confidence,
-                                    "from_memory": True
-                                }
+                    if len(expr_norm) >= 3:
+                        import re as _re
+                        expr_pat = _re.compile(r'\b' + _re.escape(expr_norm) + r'\b')
+                        for node in self.hooks.nodes.values():
+                            if node.isolated:
+                                continue
+                            node_norm = norm(node.ne)
+                            if len(node_norm) < 3:
+                                continue
+                            if expr_pat.search(node_norm) or \
+                               _re.search(r'\b' + _re.escape(node_norm) + r'\b', expr_norm):
+                                props = node.properties
+                                if "isa" in props:
+                                    return {
+                                        "question": question, "entity": node.ne,
+                                        "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
+                                        "source": node.source, "confidence": node.confidence,
+                                        "from_memory": True
+                                    }
 
             # 2. Kelime bazlı (tek kelimelik kavramlar)
             for word in words:
