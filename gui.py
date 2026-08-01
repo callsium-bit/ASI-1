@@ -393,8 +393,8 @@ class ASIPanel(QMainWindow):
 
         # Endpoint ve model ayarları
         settings_layout = QHBoxLayout()
-        self.endpoint_input = QLineEdit("http://localhost:1234/v1/chat/completions")
-        self.endpoint_input.setPlaceholderText("LM Studio / Ollama endpoint")
+        self.endpoint_input = QLineEdit("http://localhost:PORT/v1/chat/completions")
+        self.endpoint_input.setPlaceholderText("Yerel LLM endpoint")
         self.model_input = QLineEdit("local-model")
         self.model_input.setPlaceholderText("Model adı")
         self.model_input.setMaximumWidth(130)

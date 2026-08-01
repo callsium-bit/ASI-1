@@ -27,8 +27,8 @@ KERNEL = os.path.join(SCRIPT_DIR, "kernel_v2.py")
 GUI = os.path.join(SCRIPT_DIR, "gui.py")
 
 # LM Studio ayarları
-ENDPOINT = "http://localhost:1234/v1/chat/completions"
-MODEL = "qwen3.5-4b"  # Otomatik keşfedilecek
+ENDPOINT = "http://localhost:PORT/v1/chat/completions"
+MODEL = ""  # Otomatik keşfedilecek
 
 
 def run(cmd_args, use_system_python=False):

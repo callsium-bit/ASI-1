@@ -20,7 +20,7 @@ Sıfır bağımlılıkla çalışan, aksiyom tabanlı, kendi kendine web'den ö�
 ┌─────────────┐    ┌─────────────┐    ┌─────────────┐
 │ A4: Decoder  │◀───│ A5: LLM      │◀───│ A6: Web      │
 │   Dil Motoru │    │   Distiller  │    │   Ingester   │
-│  Template/LLM│    │  Qwen 4B→JSON│    │  Wikipedia   │
+│  Template/LLM│    │  yerel LLM→JSON│    │  Wikipedia   │
 └─────────────┘    └─────────────┘    └─────────────┘
 ```
 
@@ -30,7 +30,7 @@ Sıfır bağımlılıkla çalışan, aksiyom tabanlı, kendi kendine web'den ö�
 | A2 | 5N1K indeksli kanca motoru, kristal düğümler | Yok |
 | A3 | Çelişki tespiti, izole alan, serbest çağrışım | Yok |
 | A4 | İç mantığı doğal Türkçe'ye çevirme | Yok |
-| A5 | Küçük LLM'den bilgi damıtma (öner → onayla) | LM Studio |
+| A5 | Küçük LLM'den bilgi damıtma (öner → onayla) | Yerel LLM (kapalı) |
 | A6 | Wikipedia → LLM → Aksiyom → Kristal Düğüm döngüsü | LM Studio |
 
 ---
@@ -69,7 +69,7 @@ python run.py ask
 ## 🌐 Web'den Öğrenme (LM Studio gerekir)
 
 ```bash
-# Tek kavram: Wikipedia → Qwen 4B → Aksiyom → Kristal
+# Tek kavram: Wikipedia → yerel LLM → Aksiyom → Kristal
 python run.py web deprem
 
 # Kesintisiz döngü (gap kalmayana kadar)
@@ -81,7 +81,7 @@ python run.py web-loop 0
 
 ### Pipeline:
 ```
-Wikipedia API → Ham metin → Qwen 4B (JSON çıkar) → Aksiyom kontrolü → Kristal/İzole
+Wikipedia API → Ham metin → yerel LLM (JSON çıkar) → Aksiyom kontrolü → Kristal/İzole
                     ↑                                                      ↓
                     └──── LLM yoksa regex fallback ────────────────────────┘
 ```
@@ -117,7 +117,7 @@ asi-prototype/
 |---------|----------|-----|
 | Python 3.11+ | ✅ Evet | |
 | PySide6 | ❌ Sadece GUI | `pip install PySide6` |
-| LM Studio | ❌ Sadece A5-A6 | Yerel LLM, localhost:1234 |
+| Yerel LLM | ❌ Sadece A5-A6 | Varsayılan kapalı |
 | İnternet | ❌ Sadece A6 | Wikipedia API |
 
 **Çekirdek sistem (A1-A4) sıfır bağımlılıkla çalışır.**

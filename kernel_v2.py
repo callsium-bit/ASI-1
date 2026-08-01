@@ -26,7 +26,7 @@ import os
 import unicodedata
 
 # ═══════════════════════════════════════════════════════════════════
-# GLOBAL AYAR: Yerel LLM (LM Studio) tamamen kapalı
+# GLOBAL AYAR: Yerel LLM tamamen kapalı
 # True  → LLM çağrıları yapılır (damıtma, batch çözüm)
 # False → TÜM LLM çağrıları devre dışı — saf sembolik çalışma
 # ═══════════════════════════════════════════════════════════════════
@@ -977,7 +977,7 @@ class FreeAssociationEngine:
 class DecoderEngine:
     """
     Dil Motoru - İç mantığı doğal Türkçe çıktıya dönüştürür.
-    İki mod: "template" (hafif, sıfır bağımlılık) ve "llm" (LM Studio API)
+    İki mod: "template" (hafif, sıfır bağımlılık) ve "llm" (yerel LLM API)
     """
 
     # Türkçe cümle şablonları
@@ -1012,10 +1012,10 @@ class DecoderEngine:
     def __init__(self, mode: str = "template", llm_endpoint: str = None):
         """
         mode: "template" | "llm"
-        llm_endpoint: LM Studio API URL (örn: http://localhost:1234/v1/chat/completions)
+        llm_endpoint: yerel LLM API URL (örn: http://localhost:PORT/v1/chat/completions)
         """
         self.mode = mode
-        self.llm_endpoint = llm_endpoint or "http://localhost:1234/v1/chat/completions"
+        self.llm_endpoint = llm_endpoint or "http://localhost:PORT/v1/chat/completions"
 
     def decode(self, reasoning_result: dict, context: dict = None) -> str:
         """İç mantık sonucunu doğal dile çevir"""
@@ -1055,7 +1055,7 @@ class DecoderEngine:
         return str(result)
 
     def _decode_with_llm(self, result: dict, context: dict = None) -> str:
-        """LM Studio API ile doğal dil üretimi"""
+        """Yerel LLM API ile doğal dil üretimi"""
         system_prompt = (
             "Sen ASI Prototip'in dil motorusun. Sembolik akıl yürütme sonuçlarını "
             "doğal, akıcı Türkçe cümlelere dönüştürürsün. Kısa, net ve mantıklı konuş. "
@@ -1736,13 +1736,13 @@ class ASIKernel:
 
     # ── Distiller entegrasyonu ──────────────────────────────────
 
-    def get_distiller(self, endpoint: str = "http://localhost:1234/v1/chat/completions",
+    def get_distiller(self, endpoint: str = "http://localhost:PORT/v1/chat/completions",
                       model: str = "local-model") -> LocalLLMDistiller:
         """LocalLLMDistiller instance'ı oluştur (kernel'e bağlı)"""
         return LocalLLMDistiller(self, endpoint=endpoint, model=model)
 
     def distill_concept(self, concept: str, context: str = "",
-                        endpoint: str = "http://localhost:1234/v1/chat/completions",
+                        endpoint: str = "http://localhost:PORT/v1/chat/completions",
                         model: str = "local-model",
                         dry_run: bool = False) -> dict:
         """
@@ -1754,7 +1754,7 @@ class ASIKernel:
         return distiller.distill(concept, context=context, dry_run=dry_run)
 
     def auto_explore(self, max_concepts: int = 10,
-                     endpoint: str = "http://localhost:1234/v1/chat/completions",
+                     endpoint: str = "http://localhost:PORT/v1/chat/completions",
                      model: str = "local-model",
                      dry_run: bool = False) -> dict:
         """
@@ -1767,14 +1767,14 @@ class ASIKernel:
 
     # ── Web Knowledge Ingestion ──────────────────────────────────
 
-    def get_web_ingester(self, endpoint: str = "http://localhost:1234/v1/chat/completions",
+    def get_web_ingester(self, endpoint: str = "http://localhost:PORT/v1/chat/completions",
                          model: str = "local-model",
                          language: str = "tr") -> 'WebKnowledgeIngester':
         """WebKnowledgeIngester instance'ı oluştur"""
         return WebKnowledgeIngester(self, endpoint=endpoint, model=model, language=language)
 
     def ingest_from_web(self, concept: str,
-                        endpoint: str = "http://localhost:1234/v1/chat/completions",
+                        endpoint: str = "http://localhost:PORT/v1/chat/completions",
                         model: str = "local-model",
                         strategy: str = "auto") -> dict:
         """
@@ -1786,7 +1786,7 @@ class ASIKernel:
         return ingester.ingest_concept(concept, strategy=strategy)
 
     def continuous_web_ingestion(self, max_iterations: int = 0,
-                                 endpoint: str = "http://localhost:1234/v1/chat/completions",
+                                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
                                  model: str = "local-model",
                                  strategy: str = "auto",
                                  delay: float = 2.0) -> dict:
@@ -1905,14 +1905,14 @@ class LocalLLMDistiller:
     """
     Yerel LLM'den bilgi damıtan nöro-sembolik köprü.
 
-    Mimari: Qwen 4B (önerici) → JSON → AxiomEngine (onaylayıcı) → Kristal Düğüm / İzole
+    Mimari: yerel LLM (önerici) → JSON → AxiomEngine (onaylayıcı) → Kristal Düğüm / İzole
 
     Küçük model bilgiyi "önerir", sembolik motor "onaylar veya reddeder".
     Böylece 4B'lik model, arkasındaki katı mantık sayesinde 175B'lik modellerden
     daha güvenilir, sıfır halüsinasyonlu bilgi tabanı oluşturur.
     """
 
-    # Qwen 4B için optimize Türkçe sistem promptu
+    # yerel LLM için optimize Türkçe sistem promptu
     SYSTEM_PROMPT = (
         "Sen bir bilgi çıkarım asistanısın. Görevin: Verilen kavram hakkında "
         "yapılandırılmış, kesin ve genel kabul görmüş bilgiler üretmek.\n\n"
@@ -1942,7 +1942,7 @@ class LocalLLMDistiller:
     )
 
     def __init__(self, kernel: 'ASIKernel',
-                 endpoint: str = "http://localhost:1234/v1/chat/completions",
+                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
                  model: str = "local-model",
                  timeout: int = 30,
                  min_confidence: float = 0.7):
@@ -1963,7 +1963,7 @@ class LocalLLMDistiller:
     # ── LLM API çağrısı ─────────────────────────────────────────
 
     def _call_llm(self, user_prompt: str, temperature: float = 0.2) -> Optional[str]:
-        """LM Studio / Ollama OpenAI uyumlu API'ye istek at"""
+        """Yerel LLM OpenAI uyumlu API'ye istek at"""
         if not LLM_ENABLED:
             return None  # Yerel LLM kapalı — saf sembolik mod
         payload = json.dumps({
@@ -2421,7 +2421,7 @@ class WebKnowledgeIngester:
     Web'den bilgi çek, LLM ile yapılandır, Aksiyom Motoru'ndan geçir.
 
     Pipeline:
-    Gap → Wikipedia Ara → Ham Metin → Qwen 4B (JSON çıkar) → Aksiyom → Kristal/İzole
+    Gap → Wikipedia Ara → Ham Metin → yerel LLM (JSON çıkar) → Aksiyom → Kristal/İzole
 
     Kesintisiz döngü: Yeni kancalar bulundukça devam eder.
     """
@@ -2540,7 +2540,7 @@ class WebKnowledgeIngester:
     )
 
     def __init__(self, kernel: 'ASIKernel',
-                 endpoint: str = "http://localhost:1234/v1/chat/completions",
+                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
                  model: str = "local-model",
                  language: str = "tr",
                  timeout: int = 120,
@@ -2974,8 +2974,8 @@ class WebKnowledgeIngester:
     # ── Otomatik Model Keşfi ──────────────────────────────────
 
     @staticmethod
-    def discover_models(endpoint_base: str = "http://localhost:1234") -> List[str]:
-        """LM Studio / Ollama'daki mevcut modelleri keşfet"""
+    def discover_models(endpoint_base: str = "http://localhost:PORT") -> List[str]:
+        """Yerel LLM sunucusundaki mevcut modelleri keşfet"""
         try:
             url = f"{endpoint_base}/v1/models"
             req = urllib.request.Request(url)
@@ -2988,7 +2988,7 @@ class WebKnowledgeIngester:
     def auto_select_model(self) -> str:
         """
         En iyi mevcut modeli seç:
-        1. Qwen 3.5/4B'leri tercih et (hafif)
+        1. hafif modeller tercih et (hafif)
         2. Embedding modellerini atla
         3. Yoksa ilk bulunanı kullan
         """
@@ -2997,8 +2997,8 @@ class WebKnowledgeIngester:
             return self.model  # Varsayılanı kullan
 
         # Tercih sırası: küçük modeller önce
-        preferred = ["qwen3.5-4b", "qwen/qwen3.5-9b", "antares-11b",
-                     "qwen3", "phi", "llama", "mistral", "gemma"]
+        preferred = ["yerel-model",
+                     "yerel-model"]
 
         for pref in preferred:
             for m in models:
@@ -3351,8 +3351,8 @@ class UnresolvedQueue:
     """
 
     def __init__(self, kernel: 'ASIKernel', batch_size: int = 5,
-                 endpoint: str = "http://localhost:1234/v1/chat/completions",
-                 model: str = "qwen3.5-4b",
+                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                 model: str = "",
                  timeout: int = 120):
         self.kernel = kernel
         self.batch_size = batch_size
@@ -3532,8 +3532,8 @@ class StreamingIngestionPipeline:
     """
 
     def __init__(self, kernel: 'ASIKernel',
-                 endpoint: str = "http://localhost:1234/v1/chat/completions",
-                 model: str = "qwen3.5-4b"):
+                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                 model: str = ""):
         self.kernel = kernel
         self.fast_path = FastPathValidator(kernel)
         self.queue = UnresolvedQueue(kernel, batch_size=5,
@@ -4839,7 +4839,7 @@ if __name__ == "__main__":
         kernel.interactive()
     elif len(sys.argv) > 1 and sys.argv[1] == "--distill" and len(sys.argv) > 2:
         concept = sys.argv[2]
-        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:1234/v1/chat/completions"
+        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
         model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
         print(f"🔬 Kavram damıtılıyor: {concept}")
         print(f"   Endpoint: {endpoint}")
@@ -4854,7 +4854,7 @@ if __name__ == "__main__":
             print(f"\n📝 Ham LLM çıktısı (ilk 300 karakter):\n{result['raw_llm_output'][:300]}")
     elif len(sys.argv) > 1 and sys.argv[1] == "--auto-explore":
         max_concepts = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:1234/v1/chat/completions"
+        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
         model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
         print(f"🔍 Otomatik keşif başlatılıyor (max {max_concepts} kavram)...")
         kernel = ASIKernel()
@@ -4876,7 +4876,7 @@ if __name__ == "__main__":
             print("   ✅ Boşluk yok — hafıza tam!")
     elif len(sys.argv) > 1 and sys.argv[1] == "--web-ingest" and len(sys.argv) > 2:
         concept = sys.argv[2]
-        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:1234/v1/chat/completions"
+        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
         model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
         strategy = sys.argv[5] if len(sys.argv) > 5 else "auto"
         print(f"🌐 Web'den bilgi çekiliyor: {concept} (strateji: {strategy})")
@@ -4890,7 +4890,7 @@ if __name__ == "__main__":
             print(f"   ⚠️ Hatalar: {result['errors'][:3]}")
     elif len(sys.argv) > 1 and sys.argv[1] == "--web-loop":
         max_iter = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:1234/v1/chat/completions"
+        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
         model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
         print(f"🔄 Kesintisiz web ingestion başlatılıyor (max {max_iter or 'sonsuz'} iterasyon)...")
         print("   Durdurmak için Ctrl+C")
@@ -4910,7 +4910,7 @@ if __name__ == "__main__":
         print("\n💡 Kullanım:")
         print("   python kernel_v2.py --test                → Tüm testleri çalıştır")
         print("   python kernel_v2.py --interactive         → İnteraktif mod")
-        print("   python kernel_v2.py --llm                 → LM Studio bağlantılı mod")
+        print("   python kernel_v2.py --llm                 → yerel LLM bağlantılı mod")
         print("   python kernel_v2.py --distill KAVRAM      → Tek kavram damıt (LLM)")
         print("   python kernel_v2.py --auto-explore [N]    → Otomatik keşif (LLM)")
         print("   python kernel_v2.py --gaps                → Boşlukları listele")

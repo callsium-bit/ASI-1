@@ -14,8 +14,8 @@ sys.path.insert(0, SCRIPT_DIR)
 from kernel_v2 import (ASIKernel, WebKnowledgeIngester, FastPathValidator,
                         AttentionRouter, UnresolvedQueue, CrystalNode)
 
-ENDPOINT = "http://localhost:1234/v1/chat/completions"
-MODEL = "google/gemma-4-e4b"
+ENDPOINT = "http://localhost:PORT/v1/chat/completions"
+MODEL = ""  # yerel model
 MAX_CONCEPTS = 3  # Her turda işlenecek kavram
 REPORT_FILE = os.path.join(SCRIPT_DIR, "autopilot_report.json")
 
