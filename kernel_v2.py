@@ -3887,6 +3887,20 @@ FIELD_TO_RELATION = {
     "kim": "invented_by",
 }
 
+# ── ÇAPRAZ KOMPOZİSYON KURALLARI (ChatGPT önerisi → değerlendirildi, kabul) ──
+# (R1, R2, sonuç): r1.target == r2.source ise zincir kurulur
+DERIVATION_RULES = [
+    ("isa",        "part_of",    "part_of",    "isa+part_of→part_of"),
+    ("isa",        "located_in", "located_in", "isa+located_in→located_in"),
+    ("isa",        "used_for",   "used_for",   "isa+used_for→used_for"),
+    ("part_of",    "part_of",    "part_of",    "part_of geçişlilik"),
+    ("located_in", "located_in", "located_in", "located_in geçişlilik"),
+    ("causes",     "causes",     "causes",     "causes geçişlilik"),
+    ("part_of",    "located_in", "located_in", "part_of+located_in→located_in"),
+    ("instance_of","part_of",    "part_of",    "instance_of+part_of→part_of"),
+    ("subclass_of","located_in", "located_in", "subclass_of+located_in→located_in"),
+]
+
 
 class RelationEngine:
     """Çok ilişkili bilgi grafi + deterministik türetim kuralları (LLM'siz)."""
@@ -3895,6 +3909,12 @@ class RelationEngine:
         self.kernel = kernel
         self.derived_count = 0
         self.derived_log: List[dict] = []
+        self.oracle = OracleStub()
+
+    # ── Oracle erişimi ──────────────────────────────────────────
+    def set_oracle(self, oracle) -> None:
+        """Dış dünya hakemini değiştir (Faz 1: stub, Faz 2: Wikidata SPARQL)."""
+        self.oracle = oracle
 
     # ── İlişki yazma (gate'ten geçer) ──────────────────────────
     def add_relation(self, subject: str, rel_type: str, target: str,
@@ -4003,6 +4023,48 @@ class RelationEngine:
         self.derived_log.extend(derived)
         return derived
 
+    # ── ÇAPRAZ KOMPOZİSYON: A--R1-->B ∧ B--R2-->C → A--R3-->C ──
+    def derive_composition(self, concept: str, max_depth: int = 4) -> List[dict]:
+        """DERIVATION_RULES ile çapraz türetim.
+        Örn: serçe isa kuş ∧ kuş located_in ağaç → serçe located_in ağaç"""
+        derived = []
+        visited = set()
+
+        def relations_of(entity: str) -> List[tuple]:
+            """Varlığın tüm (rel, target) çiftleri."""
+            out = []
+            n = norm_tr
+            for node in self.kernel.hooks.nodes.values():
+                if node.isolated or n(node.ne) != n(entity):
+                    continue
+                for k, v in node.properties.items():
+                    if k in RELATION_TYPES:
+                        out.append((k, str(v)))
+            return out
+
+        def walk(current: str, depth: int, path: List[str]):
+            if depth > max_depth or current in visited:
+                return
+            visited.add(current)
+            for r1, t1 in relations_of(current):
+                # r1.target == t1 olan düğümün ilişkilerini bul (r2)
+                for r2, t2 in relations_of(t1):
+                    for (ra, rb, rc, rule_name) in DERIVATION_RULES:
+                        if r1 == ra and r2 == rb:
+                            if self._relation_exists(concept, rc, t2):
+                                continue
+                            derived.append({
+                                "subject": concept, "relation": rc,
+                                "target": t2, "rule": rule_name,
+                                "chain": path + [t1],
+                            })
+                walk(t1, depth + 1, path + [t1])
+
+        walk(concept, 0, [concept])
+        self.derived_count += len(derived)
+        self.derived_log.extend(derived)
+        return derived
+
     # ── Tüm türetimler (hipotez üretimi) ────────────────────────
     def derive_hypotheses(self, concept: str, max_depth: int = 3) -> List[dict]:
         """Kavram için tüm türetilebilir hipotezleri üret (gate'ten geçirilir)."""
@@ -4011,7 +4073,16 @@ class RelationEngine:
         hypotheses.extend(self.derive_transitive(concept, "part_of", max_depth))
         hypotheses.extend(self.derive_transitive(concept, "located_in", max_depth))
         hypotheses.extend(self.derive_transitive(concept, "causes", max_depth))
-        return hypotheses
+        hypotheses.extend(self.derive_composition(concept, max_depth))
+        # Tekrarları temizle
+        seen = set()
+        unique = []
+        for h in hypotheses:
+            key = (h["subject"], h["relation"], h["target"])
+            if key not in seen:
+                seen.add(key)
+                unique.append(h)
+        return unique
 
     # ── Hipotezleri gate'ten geçirip uygula ─────────────────────
     def apply_hypotheses(self, concept: str, max_depth: int = 3) -> dict:
@@ -4082,6 +4153,54 @@ class RelationEngine:
 
     def get_stats(self) -> dict:
         return {"derived_count": self.derived_count, "derived_log": self.derived_log[-20:]}
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AŞAMA 8c: OracleStub — Dış Dünya Hakemi (konsey: "öğrenme sinyali dünyadan gelir")
+# Faz 1: deterministik stub (whitelist/blacklist + türetilmiş=UNCERTAIN)
+# Faz 2: gerçek Wikidata SPARQL / Wikipedia API bağlanır
+# ═══════════════════════════════════════════════════════════════════
+
+class OracleStub:
+    """Dış dünya doğrulama arayüzü. Türetilmiş bilgi oracle onayı olmadan kristal olmaz."""
+
+    def __init__(self):
+        self._whitelist: set = set()   # manuel onaylı
+        self._blacklist: set = set()   # manuel reddedilmiş
+        self.verified_count = 0
+
+    def verify(self, source: str, rel: str, target: str) -> dict:
+        """Bir ilişkiyi dış dünyaya karşı doğrula.
+        Returns: {"verdict": "confirmed"|"rejected"|"uncertain", "confidence": float, "source": str}"""
+        key = f"{norm_tr(source)}|{rel}|{norm_tr(target)}"
+        if key in self._whitelist:
+            return {"verdict": "confirmed", "confidence": 1.0, "source": "manual_whitelist"}
+        if key in self._blacklist:
+            return {"verdict": "rejected", "confidence": 1.0, "source": "manual_blacklist"}
+        # Faz 1: oracle bağlanana kadar türetilmiş bilgi UNCERTAIN — store'a girmez
+        return {"verdict": "uncertain", "confidence": 0.0, "source": "stub_no_oracle"}
+
+    def approve(self, source: str, rel: str, target: str) -> None:
+        self._whitelist.add(f"{norm_tr(source)}|{rel}|{norm_tr(target)}")
+        self.verified_count += 1
+
+    def reject(self, source: str, rel: str, target: str) -> None:
+        self._blacklist.add(f"{norm_tr(source)}|{rel}|{norm_tr(target)}")
+
+    def check_derived(self, hypothesis: dict) -> dict:
+        """Türetilmiş bir hipotezi oracle'dan geçir.
+        confirmed → kristale yazılabilir; uncertain → bekler; rejected → izole."""
+        source = hypothesis.get("subject", "")
+        rel = hypothesis.get("relation", "")
+        target = hypothesis.get("target", "")
+        return self.verify(source, rel, target)
+
+    def get_stats(self) -> dict:
+        return {
+            "whitelist": len(self._whitelist),
+            "blacklist": len(self._blacklist),
+            "verified_count": self.verified_count,
+        }
 
 
 def norm_tr(s: str) -> str:
