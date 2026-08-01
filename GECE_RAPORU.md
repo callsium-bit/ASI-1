@@ -35,3 +35,4 @@
 2. Wikipedia 429 rate-limit (geçici, 3sn bekleme var)
 3. Gece operasyonu her turda ~150 kavram türetiyor — zincir kuruldukça artar
 4. Kullanıcı uyanınca: gece_raporu.json + gece_log.txt'ye bakabilir
+- Gizlilik: token URL'den cikarildi (c46f43a)
