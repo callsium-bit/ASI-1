@@ -4311,23 +4311,64 @@ class ToolRegistry:
     def select_tool(self, question: str) -> Optional[dict]:
         """
         Sorudaki kelimeleri araç tetikleyicileriyle eşleştir.
-        Öncelik sırası: en çok eşleşen araç kazanır.
+        BAĞLAM FİLTRESİ (bugfix): "kaç derece" ≠ hesap, "ne zaman" ≠ saat.
+        Öncelik: bilgi soruları (nedir/kimdir) → araştırma; sayı+ işlem → hesap;
+        anlık zaman kalıpları → zaman.
         """
         norm = AxiomEngine._normalize_tr
-        words = set(norm(w) for w in question.lower().strip('?.').split())
+        q = norm(question.lower().strip('?.'))
+        words = set(q.split())
+
+        # ── 1. BİLGİ SORUSU önceliği: "X nedir/kimdir/nerede/neden" ──
+        bilgi_kalip = any(t in q for t in
+                          ("nedir", "kimdir", "nered", "neden", "nasıl", "ne zaman",
+                           "hakkında", "neymiş", "anlamı", "açıkla", "tanımı"))
+        if bilgi_kalip:
+            # "X nedir" → wikipedia/veri kanalı (hesap/zaman DEĞİL)
+            return self.tools.get("wikipedia_ara") or None
+
+        # ── 2. HESAP: sayı + işlem kelimesi BİRLİKTE olmalı ──
+        sayi_var = any(ch.isdigit() for ch in q)
+        islem_kelime = any(t in q for t in
+                           ("toplam", "çarp", "böl", "çıkar", "hesapla", "eder", "kaçtır",
+                            "kare", "küp", "artı", "eksi", "yüzde"))
+        birim_var = any(t in q for t in
+                        ("derece", "yaşında", "kişi", "tl", "lira", "kg", "metre", "saat",
+                         "gün", "yıl", "ay", "kez", "tane", "adet", "dakika", "saniye"))
+        if sayi_var and islem_kelime and not birim_var:
+            return self.tools.get("hesap_yap") or None
+        if "kaç" in q and islem_kelime and not birim_var:
+            return self.tools.get("hesap_yap") or None
+
+        # ── 3. ZAMAN: sadece ANLIK zaman soruları (norm'lu kalıplar) ──
+        anlik_zaman = any(t in q for t in
+                          ("saat kac", "saat kactir", "bugun gunlerden", "bugun gun",
+                           "hangi gun", "hangi gundeyiz", "tarih ne", "tarih kac",
+                           "su an", "su anda saat", "bugunun tarihi", "gunlerden ne"))
+        if anlik_zaman:
+            return self.tools.get("zaman_sor") or None
+
+        # ── 4. ÖĞRENME komutları ──
+        if any(t in q for t in ("öğren", "kaydet", "öğret", "hatırlat", "ekle")):
+            return self.tools.get("veri_seti_tara") or None
+
+        # ── 5. Kalan: yalnızca araştırma/öğrenme araçları (hesap+zaman özel yönetilir) ──
         best_tool, best_score = None, 0
-        for tool in self.tools.values():
+        for name in ("wikipedia_ara", "veri_seti_tara"):
+            tool = self.tools.get(name)
+            if not tool:
+                continue
             score = 0
             for trig in tool["triggers"]:
                 t_norm = norm(trig)
                 if t_norm in words:
-                    score += 2  # tam kelime eşleşmesi
+                    score += 2
                 elif any(t_norm in w for w in words if len(w) > 3):
-                    score += 1  # kısmi eşleşme (örn: "kaçtır" içinde "kaç")
-            # Beraberlikte zaman_sor önceliklidir (saat kaç? vs 7 çarpı kaç?)
-            if score > best_score or (score == best_score and tool["name"] == "zaman_sor"):
+                    score += 1
+            if score > best_score:
                 best_tool, best_score = tool, score
-        return best_tool if best_score > 0 else None
+        # Yalnızca güçlü eşleşme (en az 2 puan) — zayıf eşleşme araç çalmasın
+        return best_tool if best_score >= 2 else None
 
     # ── Çağrı ve doğrulama ──
     def call(self, question: str) -> dict:
@@ -4440,7 +4481,9 @@ class ToolRegistry:
                 "gün": now.strftime("%A")}
 
     def _exec_wikipedia(self, kavram: str) -> dict:
-        """Wikipedia'dan kavramın tanımını çeker."""
+        """Wikipedia'dan kavramın tanımını çeker.
+        ARAŞTIR-ÖĞREN DÖNGÜSÜ: tanım isa kalıbı içeriyorsa gate'ten geçirip
+        kalıcı hafızaya kaydeder (bir daha sorulursa hafızadan cevap verir)."""
         if not self.kernel or not hasattr(self.kernel, "web_ingester"):
             return {"error": "Web ingester yok"}
         kavram = kavram.strip()
@@ -4449,8 +4492,38 @@ class ToolRegistry:
         data = self.kernel.web_ingester.fetch_concept_text(kavram, strategy="tr")
         if not data:
             return {"error": f"Wikipedia'da bulunamadı: {kavram}"}
-        return {"concept": kavram, "title": data.get("title", ""),
-                "extract": data.get("text", "")[:500]}
+        metin = data.get("text", "")
+
+        # ── ÖĞRENME: tanım cümlesinden isa çıkar, gate'ten geçir, kaydet ──
+        ogrenildi = False
+        try:
+            import re as _re
+            ilk_cumle = _re.split(r'[.!?]\s', metin)[0][:300]
+            gold = _re.compile(
+                r'([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?),\s*(?:[\wğüşıöçĞÜŞİÖÇ,]{0,90}?)\s*bir\s+'
+                r'([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?)(?:\'?dir|\'?dır|tir|tır)[\s.!]'
+            )
+            m = gold.search(ilk_cumle)
+            if m:
+                hedef = m.group(2).strip().rstrip('.,;:!?')
+                if 2 <= len(hedef) <= 50:
+                    gate = self.kernel.contradictions.gate(
+                        ne=kavram, properties={"isa": hedef},
+                        source=f"arastirma|wikipedia|{data.get('title', kavram)[:30]}",
+                        confidence=0.8
+                    )
+                    if gate["accepted"]:
+                        ogrenildi = True
+                        self.stats["learned"] = self.stats.get("learned", 0) + 1
+        except Exception:
+            pass
+
+        sonuc = {"concept": kavram, "title": data.get("title", ""),
+                 "extract": metin[:500]}
+        if ogrenildi:
+            sonuc["ogrenildi"] = True
+            sonuc["not"] = "Tanım kalıcı hafızaya kaydedildi"
+        return sonuc
 
     def _exec_veri_seti(self, kavram: str) -> dict:
         """Yerel veri setlerinde kavramı arar."""
