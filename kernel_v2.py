@@ -4562,6 +4562,24 @@ class ChatEngine:
             "ton": "sıcak ve meraklı",
             "oncelik": "önce dürüstlük, sonra yardım",
         }
+        # SORU-CEVAP KAYDI: tüm konuşmalar dosyaya yazılır (kontrol için)
+        self._kayit_yolu = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "sohbet_kaydi.jsonl")
+
+    def _kaydet(self, mesaj: str, cevap: str, kanal: str, adimlar: list = None) -> None:
+        """Her soru+cevap+düşünme adımlarını sohbet_kaydi.jsonl'e yaz."""
+        try:
+            kayit = {
+                "zaman": datetime.now().isoformat(),
+                "soru": mesaj,
+                "cevap": cevap,
+                "kanal": kanal,
+                "adimlar": adimlar or [],
+            }
+            with open(self._kayit_yolu, "a", encoding="utf-8") as f:
+                f.write(json.dumps(kayit, ensure_ascii=False) + "\n")
+        except Exception:
+            pass
 
     def sohbet(self, mesaj: str) -> dict:
         """7 AŞAMALI PIPELINE:
@@ -4581,18 +4599,21 @@ class ChatEngine:
                          else f"\"{gorev['metin']}\" bulunamadı.")
             self.baglam.ekle("user", mesaj)
             self.baglam.ekle("asi", cevap)
+            self._kaydet(mesaj, cevap, "gorev")
             return {"cevap": cevap, "kanal": "gorev"}
 
         gecmis = self.baglam.gecmis_sorgusu(mesaj)
         if gecmis:
             self.baglam.ekle("user", mesaj)
             self.baglam.ekle("asi", gecmis["cevap"])
+            self._kaydet(mesaj, gecmis["cevap"], "gecmis")
             return {"cevap": gecmis["cevap"], "kanal": "gecmis"}
 
         kalici = self.baglam.hafizadan_hatirla(self.kernel, mesaj)
         if kalici:
             self.baglam.ekle("user", mesaj)
             self.baglam.ekle("asi", kalici)
+            self._kaydet(mesaj, kalici, "kalici_hafiza")
             return {"cevap": kalici, "kanal": "kalici_hafiza"}
 
         # ── 2. CONTEXT BUILDER: bağlamı topla (son mesajlar + görevler) ──
@@ -4613,6 +4634,7 @@ class ChatEngine:
         self.baglam.ekle("asi", cevap)
         self.baglam.kalici_kaydet(self.kernel)
         self.baglam.stil_ogren(mesaj)
+        self._kaydet(mesaj, cevap, dusunce["kanal"], dusunce["adimlar"])
 
         return {
             "cevap": cevap,
