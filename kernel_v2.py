@@ -3970,23 +3970,37 @@ class ToolRegistry:
         ogrenildi = False
         try:
             import re as _re
-            ilk_cumle = _re.split(r'[.!?]\s', metin)[0][:300]
-            gold = _re.compile(
-                r'([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?),\s*(?:[\wğüşıöçĞÜŞİÖÇ,]{0,90}?)\s*bir\s+'
-                r'([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?)(?:\'?dir|\'?dır|tir|tır)[\s.!]'
-            )
-            m = gold.search(ilk_cumle)
-            if m:
-                hedef = m.group(2).strip().rstrip('.,;:!?')
-                if 2 <= len(hedef) <= 50:
-                    gate = self.kernel.contradictions.gate(
-                        ne=kavram, properties={"isa": hedef},
-                        source=f"arastirma|wikipedia|{data.get('title', kavram)[:30]}",
-                        confidence=0.8
-                    )
-                    if gate["accepted"]:
-                        ogrenildi = True
-                        self.stats["learned"] = self.stats.get("learned", 0) + 1
+            ilk_cumle = _re.split(r'[.!?]\s', metin)[0][:600]
+            # Son-2-kelime stratejisi (5N1K'da kanıtlandı) — "bir Y'dir" + tüm ekler
+            SON_EK = ("dır", "dir", "dur", "dür", "tır", "tir", "tur", "tür",
+                      "dırlar", "dirler", "durler", "türüdür", "türüdir", "türüdür")
+            hedef = None
+            t = ilk_cumle.strip().rstrip('.').strip()
+            for ek in SON_EK:
+                if t.endswith(ek) and len(t) > len(ek) + 2:
+                    govde = t[:-len(ek)].strip()
+                    kelimeler = govde.split()
+                    son = " ".join(kelimeler[-2:]) if len(kelimeler) >= 2 else govde
+                    son = _re.sub(r'^(bir|bu|o|her)\s+', '', son).strip()
+                    if 2 <= len(son) <= 50:
+                        hedef = son
+                        break
+            # 2. strateji: "bir X" kalıbı (dır eki olmasa bile — parantezli tanımlar)
+            if not hedef:
+                m = _re.search(r',\s*[^,]*?\bbir\s+([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?)(?:\(|\)|\.|\s|$)', t)
+                if m:
+                    aday = m.group(1).strip().rstrip('.,;:!?()')
+                    if 2 <= len(aday) <= 50:
+                        hedef = aday
+            if hedef:
+                gate = self.kernel.contradictions.gate(
+                    ne=kavram, properties={"isa": hedef},
+                    source=f"arastirma|wikipedia|{data.get('title', kavram)[:30]}",
+                    confidence=0.8
+                )
+                if gate["accepted"]:
+                    ogrenildi = True
+                    self.stats["learned"] = self.stats.get("learned", 0) + 1
         except Exception:
             pass
 
