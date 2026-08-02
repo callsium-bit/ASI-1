@@ -3966,49 +3966,54 @@ class ToolRegistry:
             return {"error": f"Wikipedia'da bulunamadı: {kavram}"}
         metin = data.get("text", "")
 
-        # ── ÖĞRENME: tanım cümlesinden isa çıkar, gate'ten geçir, kaydet ──
+        # ── ÖĞRENME: ilk birkaç cümleden isa çıkar, gate'ten geçir, kaydet ──
+        # (tek cümleyle sınırlı kalma — konuşurken daha çok öğrensin)
         ogrenildi = False
+        ogrenilen_sayisi = 0
         try:
             import re as _re
-            ilk_cumle = _re.split(r'[.!?]\s', metin)[0][:600]
-            # Son-2-kelime stratejisi (5N1K'da kanıtlandı) — "bir Y'dir" + tüm ekler
+            cumleler = [c.strip() for c in _re.split(r'[.!?]\s', metin) if c.strip()][:4]
             SON_EK = ("dır", "dir", "dur", "dür", "tır", "tir", "tur", "tür",
                       "dırlar", "dirler", "durler", "türüdür", "türüdir", "türüdür")
-            hedef = None
-            t = ilk_cumle.strip().rstrip('.').strip()
-            for ek in SON_EK:
-                if t.endswith(ek) and len(t) > len(ek) + 2:
-                    govde = t[:-len(ek)].strip()
-                    kelimeler = govde.split()
-                    son = " ".join(kelimeler[-2:]) if len(kelimeler) >= 2 else govde
-                    son = _re.sub(r'^(bir|bu|o|her)\s+', '', son).strip()
-                    if 2 <= len(son) <= 50:
-                        hedef = son
-                        break
-            # 2. strateji: "bir X" kalıbı (dır eki olmasa bile — parantezli tanımlar)
-            if not hedef:
-                m = _re.search(r',\s*[^,]*?\bbir\s+([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?)(?:\(|\)|\.|\s|$)', t)
-                if m:
-                    aday = m.group(1).strip().rstrip('.,;:!?()')
-                    if 2 <= len(aday) <= 50:
-                        hedef = aday
-            if hedef:
-                gate = self.kernel.contradictions.gate(
-                    ne=kavram, properties={"isa": hedef},
-                    source=f"arastirma|wikipedia|{data.get('title', kavram)[:30]}",
-                    confidence=0.8
-                )
-                if gate["accepted"]:
-                    ogrenildi = True
-                    self.stats["learned"] = self.stats.get("learned", 0) + 1
+            for ilk_cumle in cumleler:
+                hedef = None
+                t = ilk_cumle[:600].strip().rstrip('.').strip()
+                for ek in SON_EK:
+                    if t.endswith(ek) and len(t) > len(ek) + 2:
+                        govde = t[:-len(ek)].strip()
+                        kelimeler = govde.split()
+                        son = " ".join(kelimeler[-2:]) if len(kelimeler) >= 2 else govde
+                        son = _re.sub(r'^(bir|bu|o|her)\s+', '', son).strip()
+                        if 2 <= len(son) <= 50:
+                            hedef = son
+                            break
+                # 2. strateji: "bir X" kalıbı (dır eki olmasa bile — parantezli tanımlar)
+                if not hedef:
+                    m = _re.search(r',\s*[^,]*?\bbir\s+([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?)(?:\(|\)|\.|\s|$)', t)
+                    if m:
+                        aday = m.group(1).strip().rstrip('.,;:!?()')
+                        if 2 <= len(aday) <= 50:
+                            hedef = aday
+                if hedef:
+                    gate = self.kernel.contradictions.gate(
+                        ne=kavram, properties={"isa": hedef},
+                        source=f"arastirma|wikipedia|{data.get('title', kavram)[:30]}",
+                        confidence=0.8
+                    )
+                    if gate["accepted"]:
+                        ogrenildi = True
+                        ogrenilen_sayisi += 1
+                        self.stats["learned"] = self.stats.get("learned", 0) + 1
         except Exception:
             pass
 
+        # Kesme yok — sohbet katmanı ham metni kendi kararına göre şekillendirir
         sonuc = {"concept": kavram, "title": data.get("title", ""),
-                 "extract": metin[:500]}
+                 "extract": metin.strip()}
         if ogrenildi:
             sonuc["ogrenildi"] = True
-            sonuc["not"] = "Tanım kalıcı hafızaya kaydedildi"
+            sonuc["ogrenilen_sayisi"] = ogrenilen_sayisi
+            sonuc["not"] = "Tanım(lar) kalıcı hafızaya kaydedildi"
         return sonuc
 
     def _exec_veri_seti(self, kavram: str) -> dict:
@@ -4730,15 +4735,59 @@ class ChatEngine:
         if "nasilsin" in n:
             return "İyiyim! Bir sürü kavram öğreniyorum, arka planda eğitim sürüyor. Sen nasılsın?"
 
-        # Bilinmeyen → meraklı ton
+        # Bilinmeyen → otomatik araştır (sormadan git, kural tabanlı — LLM yok)
         if "cevaplayamıyorum" in ham or "bulunamadı" in ham:
-            return ("Hmm, bu konuda henüz kesin bir bilgim yok. "
-                    "Ama merak ettim — Wikipedia'da araştırmamı ister misin?")
+            arastirma = self._otomatik_arastir(mesaj)
+            if arastirma:
+                return arastirma
+            return ("Bu konuda hem bilgi tabanımda hem Wikipedia'da "
+                    "kesin bir şey bulamadım. Elimde yanlış/eksik bilgi "
+                    "vermektense bunu söylemeyi tercih ederim.")
 
         return ham
 
+    def _otomatik_arastir(self, mesaj: str) -> Optional[str]:
+        """Bilinmeyen kavram için otomatik Wikipedia araştırması.
+        Kural tabanlı araç seçimi (ToolRegistry) kullanır — LLM gerekmez.
+        Bulduğu bilgiyi gate'ten geçirip kalıcı hafızaya da yazar (çok
+        cümleli öğrenme — _exec_wikipedia içinde), böylece aynı kavram
+        bir daha sorulduğunda tekrar internete gitmeden, öğrendiği
+        şeyle cevap verebilir. Cevap tek cümleye sıkıştırılmaz —
+        Wikipedia'nın verdiği birkaç cümle olduğu gibi aktarılır."""
+        try:
+            sonuc = self.kernel.tools.call(mesaj)
+        except Exception:
+            return None
+        if not sonuc or sonuc.get("tool") != "wikipedia_ara":
+            return None
+        r = sonuc.get("result") or {}
+        if not isinstance(r, dict) or r.get("error"):
+            return None
+        metin = (r.get("extract") or "").strip()
+        if not metin:
+            return None
+
+        baslik = r.get("title") or ""
+        giris = f"Bunu bilmiyordum, {baslik} hakkında Wikipedia'ya baktım:" if baslik \
+            else "Bunu bilmiyordum, araştırdım:"
+
+        sayi = r.get("ogrenilen_sayisi", 0)
+        if sayi >= 2:
+            kapanis = f"\n\nBu arada, buradan {sayi} yeni bilgiyi hafızama da ekledim — bir dahakine hatırlarım."
+        elif sayi == 1:
+            kapanis = "\n\nBunu hafızama da kaydettim, bir dahakine sormana gerek kalmaz."
+        else:
+            kapanis = ""
+
+        return f"{giris}\n\n{metin}{kapanis}"
+
     def _stil_uyarla(self, cevap: str, mesaj: str) -> str:
-        """STYLE ADAPTER: kullanıcı kısa yazıyorsa kısa, uzun yazıyorsa detaylı cevap."""
+        """STYLE ADAPTER: kullanıcı kısa yazıyorsa kısa, uzun yazıyorsa detaylı cevap.
+        İSTİSNA: Wikipedia'dan araştırılmış cevaplar kısaltılmaz — bilgi
+        kaybı olur ve 'sözlük gibi' tek cümleye düşer. Bilgi verirken
+        uzun konuşmak istenen davranış."""
+        if "Wikipedia'ya baktım" in cevap or "araştırdım:" in cevap:
+            return cevap
         # Kullanıcı çok kısa yazdıysa cevabı kısalt
         if len(mesaj.strip()) <= 15 and len(cevap) > 120:
             # İlk cümleyi bul
