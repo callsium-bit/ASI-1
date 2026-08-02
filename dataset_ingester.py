@@ -12,7 +12,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
-from kernel_v2 import ASIKernel, LocalLLMDistiller, FastPathValidator
+from kernel_v2 import ASIKernel, FastPathValidator
 
 # Varsayılan veri yolları (masaüstü)
 DESKTOP = os.path.join(os.path.expanduser("~"), "Desktop")

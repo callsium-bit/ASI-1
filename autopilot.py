@@ -14,8 +14,6 @@ sys.path.insert(0, SCRIPT_DIR)
 from kernel_v2 import (ASIKernel, WebKnowledgeIngester, FastPathValidator,
                         AttentionRouter, UnresolvedQueue, CrystalNode)
 
-ENDPOINT = "http://localhost:PORT/v1/chat/completions"
-MODEL = ""  # yerel model
 MAX_CONCEPTS = 3  # Her turda işlenecek kavram
 REPORT_FILE = os.path.join(SCRIPT_DIR, "autopilot_report.json")
 
@@ -28,8 +26,7 @@ def run_cycle():
     kernel = ASIKernel()
     ingester = WebKnowledgeIngester(kernel, language="tr", timeout=10)
     fp = FastPathValidator(kernel)
-    queue = UnresolvedQueue(kernel, batch_size=5,
-                            endpoint=ENDPOINT, model=MODEL)
+    queue = UnresolvedQueue(kernel, batch_size=5)
 
     # İstatistik sayaçları
     stats = {
@@ -37,7 +34,6 @@ def run_cycle():
         "accepted_by_fast_path": 0,
         "rejected_by_fast_path": 0,
         "unresolved": 0,
-        "llm_calls": 0,
         "duplicate_items": 0,
         "new_knowledge": 0,
         "contradictions": 0,
@@ -52,11 +48,9 @@ def run_cycle():
         "final_state": {}
     }
 
-    # 1. Boşluk tespiti
-    from kernel_v2 import LocalLLMDistiller
-    distiller = LocalLLMDistiller(kernel)
-    gaps = distiller.detect_gaps(limit=10)
-    log(f"🔍 {len(gaps)} boşluk bulundu")
+    # 1. Boşluk tespiti (LLM kaldırıldı — sembolik boşluk analizi)
+    gaps = kernel.tools.call('boşlukları listele') if hasattr(kernel, 'tools') else []
+    log(f"🔍 {len(gaps) if isinstance(gaps, list) else 0} boşluk bulundu")
 
     if not gaps:
         log("✅ Boşluk yok, sistem temiz")
@@ -168,24 +162,14 @@ def run_cycle():
     # 2.5. Queue'da birikenleri flush et
     pending = queue.pending()
     if pending > 0:
-        log(f"📬 Queue'da {pending} unresolved öğe var, batch çözülüyor...")
+        log(f"📬 Queue'da {pending} unresolved öğe var, sembolik çözülüyor...")
         resolved = queue.resolve_batch()
-        stats["llm_calls"] += 1
         total_accepted += resolved
         stats["new_knowledge"] += resolved
         log(f"   ✅ Batch: {resolved}/{pending} çözüldü")
 
     # 3. Son durum ve istatistik
     report["final_state"] = kernel.get_status()
-
-    # LLM bağımlılık oranı
-    total = stats["total_items"]
-    if total > 0:
-        stats["llm_dependency_ratio"] = round(
-            stats["unresolved"] / total, 4
-        )
-    else:
-        stats["llm_dependency_ratio"] = 0.0
 
     report["stats"] = stats
 
@@ -205,10 +189,9 @@ def run_cycle():
     log(f"   Total: {stats['total_items']} | "
         f"FastPath Accept: {stats['accepted_by_fast_path']} | "
         f"FastPath Reject: {stats['rejected_by_fast_path']}")
-    log(f"   Unresolved→LLM: {stats['unresolved']} | "
+    log(f"   Unresolved: {stats['unresolved']} | "
         f"Duplicates: {stats['duplicate_items']} | "
         f"New: {stats['new_knowledge']}")
-    log(f"   LLM Dependency: {stats['llm_dependency_ratio']:.1%}")
 
     # 5. 💾 KALICI HAFIZA: bilgi tabanını diske kaydet
     try:

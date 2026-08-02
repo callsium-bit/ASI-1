@@ -27,8 +27,6 @@ KERNEL = os.path.join(SCRIPT_DIR, "kernel_v2.py")
 GUI = os.path.join(SCRIPT_DIR, "gui.py")
 
 # Yerel LLM ayarları
-ENDPOINT = "http://localhost:PORT/v1/chat/completions"
-MODEL = ""  # Otomatik keşfedilecek
 
 
 def run(cmd_args, use_system_python=False):
@@ -68,17 +66,17 @@ def main():
     elif mode == "distill":
         concept = sys.argv[2] if len(sys.argv) > 2 else input("Kavram: ").strip()
         print(f"🔬 '{concept}' damıtılıyor (LLM gerekir)...\n")
-        run([KERNEL, "--distill", concept, ENDPOINT, MODEL])
+        run([KERNEL, "--distill", concept])
 
     elif mode == "web":
         concept = sys.argv[2] if len(sys.argv) > 2 else input("Kavram: ").strip()
         print(f"🌐 '{concept}' web'den çekiliyor...\n")
-        run([KERNEL, "--web-ingest", concept, ENDPOINT, MODEL])
+        run([KERNEL, "--web-ingest", concept])
 
     elif mode == "web-loop":
         n = sys.argv[2] if len(sys.argv) > 2 else input("Kaç tur (0=sonsuz): ").strip()
         print(f"🔄 Kesintisiz web döngüsü ({n} tur)...\n")
-        run([KERNEL, "--web-loop", str(n), ENDPOINT, MODEL])
+        run([KERNEL, "--web-loop", str(n)])
 
     elif mode == "gui":
         print("🖥️ PySide6 kontrol paneli başlatılıyor...\n")

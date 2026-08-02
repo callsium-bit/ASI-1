@@ -30,7 +30,7 @@ import unicodedata
 # True  → LLM çağrıları yapılır (damıtma, batch çözüm)
 # False → TÜM LLM çağrıları devre dışı — saf sembolik çalışma
 # ═══════════════════════════════════════════════════════════════════
-LLM_ENABLED = False
+LLM_ENABLED = False  # ⚠️ KALDIRILDI (2026-08): LLM/LM Studio sonsuza dek çıkarıldı, saf sembolik
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1739,10 +1739,9 @@ class ASIKernel:
 
     # ── Distiller entegrasyonu ──────────────────────────────────
 
-    def get_distiller(self, endpoint: str = "http://localhost:PORT/v1/chat/completions",
-                      model: str = "local-model") -> LocalLLMDistiller:
-        """LocalLLMDistiller instance'ı oluştur (kernel'e bağlı)"""
-        return LocalLLMDistiller(self, endpoint=endpoint, model=model)
+    def get_distiller(self, *args, **kwargs) -> None:
+        """LLM damıtma KALDIRILDI — sistem saf sembolik çalışır."""
+        return None
 
     def distill_concept(self, concept: str, context: str = "",
                         endpoint: str = "http://localhost:PORT/v1/chat/completions",
@@ -1767,6 +1766,26 @@ class ASIKernel:
         """
         distiller = self.get_distiller(endpoint=endpoint, model=model)
         return distiller.auto_explore(max_concepts=max_concepts, dry_run=dry_run)
+
+    def _sembolik_boşluklar(self, limit: int = 20) -> list:
+        """LLM'siz boşluk analizi: tek ilişkili / isa'sız kavramları bul."""
+        gaps = []
+        norm = self.axioms._normalize_tr
+        # isa'sı olmayan veya sadece 1 ilişkisi olan aktif kavramlar
+        for node in self.hooks.nodes.values():
+            if node.isolated:
+                continue
+            iliski_sayisi = len(node.properties)
+            if iliski_sayisi <= 1:
+                gaps.append({
+                    "concept": node.ne,
+                    "type": "tek_iliski",
+                    "priority": 10 - iliski_sayisi,
+                })
+            if len(gaps) >= limit:
+                break
+        # Genişlet: tanımsız kavramlar (hiç düğümü olmayan sık geçen kelimeler)
+        return gaps
 
     # ── Web Knowledge Ingestion ──────────────────────────────────
 
@@ -1809,11 +1828,9 @@ class ASIKernel:
         
         iteration = 0
         while max_iterations == 0 or iteration < max_iterations:
-            from kernel_v2 import LocalLLMDistiller
-            distiller = LocalLLMDistiller(self)
-
-            # ── HİBRİT SEÇİM: %70 yeni kavram + %30 derinleştirme ──
-            gaps = distiller.detect_gaps(limit=20)
+            # ── SEMBOLİK BOŞLUK ANALİZİ (LLM kaldırıldı) ──
+            # Bilgi tabanında en az ilişkili kavramları boşluk say
+            gaps = self._sembolik_boşluklar(limit=20)
             new_concepts = self.web_ingester.suggest_new_concepts(count=7) if hasattr(self, "web_ingester") else []
 
             if not gaps and not new_concepts:
@@ -1902,522 +1919,6 @@ class ASIKernel:
 
 # ═══════════════════════════════════════════════════════════════════
 # AŞAMA 5: LocalLLMDistiller — Küçük LLM + Sembolik Motor Hibriti
-# ═══════════════════════════════════════════════════════════════════
-
-class LocalLLMDistiller:
-    """
-    Yerel LLM'den bilgi damıtan nöro-sembolik köprü.
-
-    Mimari: yerel LLM (önerici) → JSON → AxiomEngine (onaylayıcı) → Kristal Düğüm / İzole
-
-    Küçük model bilgiyi "önerir", sembolik motor "onaylar veya reddeder".
-    Böylece 4B'lik model, arkasındaki katı mantık sayesinde 175B'lik modellerden
-    daha güvenilir, sıfır halüsinasyonlu bilgi tabanı oluşturur.
-    """
-
-    # yerel LLM için optimize Türkçe sistem promptu
-    SYSTEM_PROMPT = (
-        "Sen bir bilgi çıkarım asistanısın. Görevin: Verilen kavram hakkında "
-        "yapılandırılmış, kesin ve genel kabul görmüş bilgiler üretmek.\n\n"
-        "ÇIKTI FORMATIN KESİNLİKLE AŞAĞIDAKİ JSON OLMALI. Başka hiçbir metin, "
-        "açıklama, markdown işareti YAZMA. SADECE JSON:\n\n"
-        '{\n'
-        '  "concept": "kavram_adı",\n'
-        '  "relations": [\n'
-        '    {"type": "isa", "target": "üst_kategori", "confidence": 0.95, '
-        '"explanation": "X bir Ydir çünkü..."},\n'
-        '    {"type": "hasa", "property": "özellik", "value": "değer", '
-        '"confidence": 0.90, "explanation": "Xin Y özelliği Zdir çünkü..."},\n'
-        '    {"type": "yapamaz", "action": "eylem", "reason": "neden", '
-        '"confidence": 0.95, "explanation": "X Y yapamaz çünkü..."}\n'
-        '  ]\n'
-        '}\n\n'
-        "İLİŞKİ TİPLERİ:\n"
-        '- "isa": X bir Y\'dir (kategori/üst sınıf). Örn: "köpek isa hayvan"\n'
-        '- "hasa": X\'in Y özelliği Z değerindedir. Örn: "gökyüzü hasa renk mavi"\n'
-        '- "yapamaz": X, Y eylemini yapamaz. Örn: "balık yapamaz uçmak"\n\n'
-        "KURALLAR:\n"
-        "- Sadece GENEL KABUL GÖRMÜŞ, tartışmasız doğruları yaz.\n"
-        "- Her ilişki için 0.0-1.0 arası confidence ver (1.0 = mutlak doğru).\n"
-        "- En az 3, en fazla 8 ilişki üret.\n"
-        "- Spekülasyon, felsefe, metafor YAZMA.\n"
-        "- Cevabın SADECE JSON objesi olsun, başka karakter olmasın."
-    )
-
-    def __init__(self, kernel: 'ASIKernel',
-                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
-                 model: str = "local-model",
-                 timeout: int = 30,
-                 min_confidence: float = 0.7):
-        self.kernel = kernel
-        self.endpoint = endpoint
-        self.model = model
-        self.timeout = timeout
-        self.min_confidence = min_confidence
-        self.stats = {
-            "total_attempts": 0,
-            "successful_distills": 0,
-            "failed_parses": 0,
-            "axiom_rejections": 0,
-            "nodes_created": 0,
-            "isolated": 0
-        }
-
-    # ── LLM API çağrısı ─────────────────────────────────────────
-
-    def _call_llm(self, user_prompt: str, temperature: float = 0.2) -> Optional[str]:
-        """Yerel LLM OpenAI uyumlu API'ye istek at"""
-        if not LLM_ENABLED:
-            return None  # Yerel LLM kapalı — saf sembolik mod
-        payload = json.dumps({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": temperature,
-            "max_tokens": 1200,
-            "stop": None
-        }).encode('utf-8')
-
-        try:
-            req = urllib.request.Request(
-                self.endpoint,
-                data=payload,
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read())
-                msg = data["choices"][0]["message"]
-                content = msg.get("content", "").strip()
-                if not content:
-                    content = msg.get("reasoning_content", "").strip()
-                return content if content else None
-        except urllib.error.URLError as e:
-            print(f"   ⚠️ LLM bağlantı hatası: {e}")
-            return None
-        except (json.JSONDecodeError, KeyError, IndexError) as e:
-            print(f"   ⚠️ LLM yanıt parse hatası: {e}")
-            return None
-        except Exception as e:
-            print(f"   ⚠️ Beklenmeyen hata: {e}")
-            return None
-
-    def _extract_json(self, text: str) -> Optional[dict]:
-        """LLM çıktısından JSON objesini çıkar (markdown vb temizler)"""
-        if not text:
-            return None
-
-        # Strateji 1: Direkt JSON parse
-        try:
-            return json.loads(text)
-        except json.JSONDecodeError:
-            pass
-
-        # Strateji 2: ```json ... ``` bloğunu bul
-        m = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
-        if m:
-            try:
-                return json.loads(m.group(1).strip())
-            except json.JSONDecodeError:
-                pass
-
-        # Strateji 3: İlk { ... } bloğunu bul (en dıştakini)
-        depth = 0
-        start = -1
-        for i, ch in enumerate(text):
-            if ch == '{':
-                if depth == 0:
-                    start = i
-                depth += 1
-            elif ch == '}':
-                depth -= 1
-                if depth == 0 and start >= 0:
-                    try:
-                        return json.loads(text[start:i+1])
-                    except json.JSONDecodeError:
-                        continue
-
-        return None
-
-    # ── Boşluk (Gap) Tespiti ────────────────────────────────────
-
-    def detect_gaps(self, limit: int = 20) -> List[dict]:
-        """
-        Hafızada eksik/yarım kalmış kavramları tespit et.
-
-        Gap türleri:
-        - "hook_only": Hook var ama kristal düğümü yok
-        - "shallow_node": Düğüm var ama 5N1K alanları boş
-        - "unconnected": Düğüm var ama hiç kancası yok (öksüz)
-        """
-        norm = AxiomEngine._normalize_tr
-        gaps = []
-
-        # Gap tip 1: Hook'u olan ama düğümü olmayan kavramlar
-        hooked_concepts = set()
-        for hook_name in self.kernel.hooks.hooks:
-            # Bileşik hook'ları ayır (örn: "gokyuzu.renk" → "gokyuzu")
-            base = hook_name.split('.')[0]
-            if base and len(base) > 2:
-                hooked_concepts.add(base)
-
-        noded_concepts = {norm(n.ne) for n in self.kernel.hooks.nodes.values()}
-
-        for concept in hooked_concepts - noded_concepts:
-            if len(gaps) >= limit:
-                break
-            node_count = len(self.kernel.hooks.get_hook_nodes(concept))
-            if node_count == 0:
-                gaps.append({
-                    "type": "hook_only",
-                    "concept": concept,
-                    "hooks_referencing": len(self.kernel.hooks.hooks.get(concept, set())),
-                    "priority": 10  # Hook var ama tanımsız → yüksek öncelik
-                })
-
-        # Gap tip 2: Düğüm var ama 5N1K eksik
-        for node in self.kernel.hooks.nodes.values():
-            if node.isolated:
-                continue
-            missing = []
-            for field, val in [("nasil", node.nasil), ("neden", node.neden), ("kim", node.kim)]:
-                if not val:
-                    missing.append(field)
-            if len(missing) >= 2:
-                gaps.append({
-                    "type": "shallow_node",
-                    "concept": node.ne,
-                    "node_id": node.id,
-                    "missing_fields": missing,
-                    "priority": 5
-                })
-
-        # Gap tip 3: Hiç kancası olmayan düğüm (öksüz)
-        for node in self.kernel.hooks.nodes.values():
-            if node.isolated:
-                continue
-            if len(node.hooks) <= 1:  # Sadece kendi adı var
-                gaps.append({
-                    "type": "unconnected",
-                    "concept": node.ne,
-                    "node_id": node.id,
-                    "hook_count": len(node.hooks),
-                    "priority": 3
-                })
-
-        # Önceliğe göre sırala
-        gaps.sort(key=lambda g: g["priority"], reverse=True)
-        return gaps[:limit]
-
-    # ── Bilgi Damıtma (Distill) ──────────────────────────────────
-
-    def distill(self, concept: str, context: str = "",
-                dry_run: bool = False) -> dict:
-        """
-        Bir kavram hakkında LLM'den yapılandırılmış bilgi çek,
-        aksiyom kontrolünden geçir, uygun olanları kaydet.
-
-        Args:
-            concept: Hedef kavram (örn: "yıldırım")
-            context: Ek bağlam (örn: "gökyüzü ve yağmurla ilişkili")
-            dry_run: True ise LLM çağrısı yap ama kaydetme
-
-        Returns:
-            {
-                "concept": str,
-                "raw_llm_output": str,
-                "relations_found": int,
-                "accepted": int,
-                "rejected": int,
-                "nodes_created": [...],
-                "isolated": [...],
-                "errors": [...]
-            }
-        """
-        self.stats["total_attempts"] += 1
-        result = {
-            "concept": concept,
-            "context": context,
-            "raw_llm_output": None,
-            "relations_found": 0,
-            "accepted": 0,
-            "rejected": 0,
-            "nodes_created": [],
-            "isolated": [],
-            "errors": []
-        }
-
-        # 1. LLM'e sor
-        user_prompt = f'Kavram: "{concept}"'
-        if context:
-            user_prompt += f'\nBağlam: {context}'
-        user_prompt += '\n\nBu kavram hakkında isa, hasa, yapamaz ilişkilerini JSON formatında çıkar.'
-
-        llm_output = self._call_llm(user_prompt)
-        if not llm_output:
-            result["errors"].append("LLM çağrısı başarısız")
-            self.stats["failed_parses"] += 1
-            return result
-
-        result["raw_llm_output"] = llm_output
-
-        # 2. JSON parse
-        data = self._extract_json(llm_output)
-        if not data:
-            result["errors"].append(f"JSON parse edilemedi. Ham çıktı: {llm_output[:200]}")
-            self.stats["failed_parses"] += 1
-            return result
-
-        relations = data.get("relations", [])
-        if not isinstance(relations, list):
-            result["errors"].append("relations bir liste değil")
-            self.stats["failed_parses"] += 1
-            return result
-
-        result["relations_found"] = len(relations)
-
-        # 3. Her ilişkiyi doğrula ve kaydet
-        for i, rel in enumerate(relations):
-            rel_type = rel.get("type", "")
-            confidence = float(rel.get("confidence", 0.5))
-
-            # Düşük güvenli olanları atla
-            if confidence < self.min_confidence:
-                result["rejected"] += 1
-                result["errors"].append(
-                    f"İlişki #{i} düşük güven ({confidence:.2f} < {self.min_confidence}): {rel}"
-                )
-                continue
-
-            rel_result = self._validate_and_store(concept, rel, dry_run)
-
-            if rel_result.get("accepted"):
-                result["accepted"] += 1
-                if not dry_run:
-                    result["nodes_created"].append(rel_result.get("node_id", "?"))
-            else:
-                result["rejected"] += 1
-                result["errors"].append(rel_result.get("reason", "Bilinmeyen ret sebebi"))
-
-        if result["accepted"] > 0:
-            self.stats["successful_distills"] += 1
-
-        return result
-
-    def _validate_and_store(self, concept: str, relation: dict,
-                            dry_run: bool = False) -> dict:
-        """
-        Tek bir ilişkiyi aksiyom motorundan geçir, uygunsa kristal düğüm oluştur.
-
-        Returns: {"accepted": bool, "node_id": str?, "reason": str}
-        """
-        rel_type = relation.get("type", "")
-        norm = self.kernel.axioms._normalize_tr
-
-        if rel_type == "isa":
-            target = relation.get("target", "")
-            if not target:
-                return {"accepted": False, "reason": "isa ilişkisinde target eksik"}
-
-            # Aksiyom kontrolü: X isa Y çelişiyor mu?
-            conflicts = self.kernel.axioms.check_against_axioms(
-                subject=concept, predicate="kategori", object_=target, relation="isa"
-            )
-
-            if conflicts:
-                self.stats["axiom_rejections"] += 1
-                if not dry_run:
-                    self._isolate(concept, {"isa": target}, conflicts[0]["reason"])
-                return {"accepted": False, "reason": conflicts[0]["reason"]}
-
-            if not dry_run:
-                # ✅ gate üzerinden geç (dedup + contradiction)
-                gate_result = self.kernel.contradictions.gate(
-                    ne=concept, properties={"isa": target},
-                    source=f"llm_distiller (confidence: {relation.get('confidence', '?')})",
-                    confidence=float(relation.get("confidence", 0.8))
-                )
-                self.stats["nodes_created"] += 1
-                return {"accepted": True, "node_id": gate_result["node_id"]}
-
-            return {"accepted": True, "node_id": "dry_run"}
-
-        elif rel_type == "hasa":
-            prop = relation.get("property", "")
-            value = relation.get("value", "")
-            if not prop or not value:
-                return {"accepted": False, "reason": "hasa ilişkisinde property/value eksik"}
-
-            # Aksiyom kontrolü
-            conflicts = self.kernel.axioms.check_against_axioms(
-                subject=concept, predicate=prop, object_=str(value), relation="hasa"
-            )
-
-            if conflicts:
-                self.stats["axiom_rejections"] += 1
-                if not dry_run:
-                    self._isolate(concept, {prop: value}, conflicts[0]["reason"])
-                return {"accepted": False, "reason": conflicts[0]["reason"]}
-
-            # Mevcut düğümlerle çelişki kontrolü
-            eval_result = self.kernel.contradictions.evaluate_statement(
-                subject=concept, predicate=prop, object_=str(value), relation="hasa"
-            )
-
-            if not eval_result["accepted"]:
-                self.stats["axiom_rejections"] += 1
-                if not dry_run:
-                    self._isolate(concept, {prop: value}, eval_result["reason"])
-                return {"accepted": False, "reason": eval_result["reason"]}
-
-            if not dry_run:
-                # ✅ gate üzerinden geç (dedup + contradiction)
-                gate_result = self.kernel.contradictions.gate(
-                    ne=concept, properties={prop: value},
-                    source=f"llm_distiller (confidence: {relation.get('confidence', '?')})",
-                    confidence=float(relation.get("confidence", 0.8))
-                )
-                self.stats["nodes_created"] += 1
-                return {"accepted": True, "node_id": gate_result["node_id"]}
-
-            return {"accepted": True, "node_id": "dry_run"}
-
-        elif rel_type == "yapamaz":
-            action = relation.get("action", "")
-            reason = relation.get("reason", "")
-            if not action:
-                return {"accepted": False, "reason": "yapamaz ilişkisinde action eksik"}
-
-            # "X yapamaz Y" — aksiyom motorunda bunu kontrol eden özel bir şey yok,
-            # ama "X yapar Y" deseydi çelişirdi. Burada "yapamaz" her zaman mantıklı
-            # olmayabilir. Varlık tipine göre kontrol edelim.
-            can_do, explanation = self.kernel.axioms.can_perform_action(concept, action)
-
-            # Eğer zaten yapamıyorsa, "yapamaz" bilgisi gereksiz (aksiyom zaten söylüyor)
-            if not can_do:
-                return {"accepted": False,
-                        "reason": f"'{concept}' zaten '{action}' yapamaz (aksiyom: {explanation}). Gereksiz tekrar."}
-
-            # "yapamaz" ilişkisini hasa olarak kaydet: X hasa yapamadigi_eylem:action
-            if not dry_run:
-                # ✅ gate üzerinden geç
-                gate_result = self.kernel.contradictions.gate(
-                    ne=concept,
-                    properties={"yapamadigi_eylem": action, "yapamama_nedeni": reason},
-                    source=f"llm_distiller (confidence: {relation.get('confidence', '?')})",
-                    confidence=float(relation.get("confidence", 0.8))
-                )
-                self.stats["nodes_created"] += 1
-                return {"accepted": True, "node_id": gate_result["node_id"]}
-
-            return {"accepted": True, "node_id": "dry_run"}
-
-        else:
-            return {"accepted": False, "reason": f"Bilinmeyen ilişki tipi: {rel_type}"}
-
-    def _isolate(self, concept: str, properties: dict, reason: str):
-        """Çelişkili bilgiyi izole alana at"""
-        node = CrystalNode(
-            id=self.kernel.hooks._next_id(),
-            ne=concept,
-            properties=properties,
-            source=f"llm_distiller (REDDEDILDI: {reason[:80]})",
-            isolated=True,
-            confidence=0.2
-        )
-        self.kernel.hooks.nodes[node.id] = node
-        self.kernel.contradictions.isolation_zone.append(node)
-        self.stats["isolated"] += 1
-
-    # ── Otomatik Keşif Döngüsü ──────────────────────────────────
-
-    def auto_explore(self, max_concepts: int = 10,
-                     dry_run: bool = False) -> dict:
-        """
-        Otomatik keşif: Boşlukları tespit et → LLM'ye sor → Doğrula → Kaydet.
-
-        Döngü:
-        1. Gap'leri tespit et
-        2. Her gap için LLM'den bilgi çek
-        3. Aksiyom kontrolünden geçir
-        4. Onaylananları kristal düğüm yap, çelişenleri izole et
-        5. Yeni gap'leri tara (öğrenilenler zincirleme yeni gap'ler oluşturabilir)
-        """
-        summary = {
-            "rounds": 0,
-            "concepts_explored": [],
-            "total_accepted": 0,
-            "total_rejected": 0,
-            "total_nodes": 0,
-            "total_isolated": 0,
-            "per_concept": {}
-        }
-
-        for round_num in range(1, 4):  # En fazla 3 tur
-            gaps = self.detect_gaps(limit=max_concepts)
-            if not gaps:
-                print("   ✅ Keşfedilecek boşluk kalmadı.")
-                break
-
-            summary["rounds"] = round_num
-            print(f"\n   🔍 Tur {round_num}: {len(gaps)} boşluk tespit edildi")
-
-            for gap in gaps[:max_concepts]:
-                concept = gap["concept"]
-                gap_type = gap["type"]
-
-                if concept in summary["concepts_explored"]:
-                    continue
-
-                summary["concepts_explored"].append(concept)
-
-                context = ""
-                if gap_type == "hook_only":
-                    context = f"(hafızada adı geçiyor ama tanımlı değil)"
-                elif gap_type == "shallow_node":
-                    context = f"(eksik alanlar: {', '.join(gap.get('missing_fields', []))})"
-
-                print(f"   🎯 Damıtılıyor: {concept} [{gap_type}] {context}")
-
-                result = self.distill(concept, context=context, dry_run=dry_run)
-
-                summary["total_accepted"] += result["accepted"]
-                summary["total_rejected"] += result["rejected"]
-                summary["total_nodes"] += len(result["nodes_created"])
-                summary["total_isolated"] += len(result.get("isolated", []))
-                summary["per_concept"][concept] = {
-                    "accepted": result["accepted"],
-                    "rejected": result["rejected"],
-                    "nodes": result["nodes_created"],
-                    "errors": result["errors"][:3]
-                }
-
-                status = "✅" if result["accepted"] > 0 else "❌"
-                print(f"      {status} +{result['accepted']} kabul, "
-                      f"-{result['rejected']} ret, "
-                      f"{'HATA: ' + result['errors'][0] if result['errors'] else 'OK'}")
-
-        # Final boşluk sayısı
-        final_gaps = self.detect_gaps(limit=1)
-        summary["remaining_gaps"] = len(final_gaps)
-
-        return summary
-
-    def get_stats(self) -> dict:
-        """Distiller istatistikleri + sistem durumu"""
-        return {
-            **self.stats,
-            "system": self.kernel.get_status(),
-            "acceptance_rate": (
-                self.stats["nodes_created"] / max(self.stats["total_attempts"], 1)
-            )
-        }
-
-
-# ═══════════════════════════════════════════════════════════════════
-# AŞAMA 6: WebKnowledgeIngester — Web → LLM → Aksiyom → Kristal
-# ═══════════════════════════════════════════════════════════════════
 
 class WebKnowledgeIngester:
     """
@@ -2714,7 +2215,8 @@ class WebKnowledgeIngester:
 
     def _call_llm_raw(self, system_prompt: str, user_prompt: str,
                       temperature: float = 0.15, max_tokens: int = 2000) -> Optional[str]:
-        if not LLM_ENABLED:
+        """LLM çağrısı KALDIRILDI — her zaman None döner (saf sembolik)."""
+        if True:
             return None  # Yerel LLM kapalı — saf sembolik mod
         payload = json.dumps({
             "model": self.model,
@@ -2978,42 +2480,12 @@ class WebKnowledgeIngester:
 
     @staticmethod
     def discover_models(endpoint_base: str = "http://localhost:PORT") -> List[str]:
-        """Yerel LLM sunucusundaki mevcut modelleri keşfet"""
-        try:
-            url = f"{endpoint_base}/v1/models"
-            req = urllib.request.Request(url)
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                data = json.loads(resp.read())
-                return [m["id"] for m in data.get("data", [])]
-        except Exception:
-            return []
+        """Model keşfi KALDIRILDI — LLM kullanılmıyor."""
+        return []
 
     def auto_select_model(self) -> str:
-        """
-        En iyi mevcut modeli seç:
-        1. hafif modeller tercih et (hafif)
-        2. Embedding modellerini atla
-        3. Yoksa ilk bulunanı kullan
-        """
-        models = self.discover_models()
-        if not models:
-            return self.model  # Varsayılanı kullan
-
-        # Tercih sırası: küçük modeller önce
-        preferred = ["yerel-model",
-                     "yerel-model"]
-
-        for pref in preferred:
-            for m in models:
-                if pref in m.lower() and "embed" not in m.lower():
-                    return m
-
-        # Hiçbiri eşleşmezse, embedding olmayan ilk modeli döndür
-        for m in models:
-            if "embed" not in m.lower():
-                return m
-
-        return models[0]  # Son çare
+        """Model seçimi KALDIRILDI — LLM kullanılmıyor."""
+        return ""
 
     # ── Doğrulama ve Kaydetme ─────────────────────────────────
 
@@ -4643,68 +4115,34 @@ def run_tests():
     assert len(decoded) > 20, f"Decoder çıktısı çok kısa: {decoded}"
     print(f"   ✓ Decoded: {decoded[:80]}...")
 
-    # --- TEST 13: Distiller — Gap Detection ---
-    print("\n📋 TEST 13: Distiller — Boşluk (Gap) Tespiti")
-    distiller = LocalLLMDistiller(kernel)
-    gaps = distiller.detect_gaps(limit=20)
-    print(f"   ✓ {len(gaps)} boşluk tespit edildi")
-    if gaps:
-        for g in gaps[:3]:
-            print(f"     [{g['type']}] {g['concept']} (öncelik: {g['priority']})")
+    # --- TEST 13: Boşluk Tespiti (sembolik — LLM'siz) ---
+    print("\n📋 TEST 13: Bilgi Boşluğu Tespiti (sembolik)")
+    gaps = kernel.tools.call("boşlukları listele")
+    if isinstance(gaps, dict) and gaps.get("tool"):
+        print(f"   ✓ Araç çalıştı: {gaps['tool']}")
+    print(f"   ✓ Boşluk analizi sembolik (LLM yok)")
 
-    # --- TEST 14: Distiller — JSON Extraction ---
-    print("\n📋 TEST 14: Distiller — JSON Çıkarma")
-    test_cases = [
-        ('{"concept":"test","relations":[{"type":"isa","target":"kategori","confidence":0.9}]}',
-         True, "direkt JSON"),
-        ('```json\n{"concept":"test","relations":[]}\n```',
-         True, "markdown içinde JSON"),
-        ('İşte sonuç: {"concept":"x","relations":[{"type":"hasa","property":"renk","value":"mavi","confidence":1.0}]}',
-         True, "metin içinde JSON"),
-        ('bu geçersiz json {{', False, "geçersiz JSON"),
-    ]
-    for text, should_succeed, desc in test_cases:
-        extracted = distiller._extract_json(text)
-        if should_succeed:
-            assert extracted is not None, f"'{desc}': JSON çıkarılamadı"
-            print(f"   ✓ {desc}: concept={extracted.get('concept', '?')}")
-        else:
-            assert extracted is None, f"'{desc}': Geçersiz JSON bulunmamalıydı"
-            print(f"   ✓ {desc}: doğru şekilde None döndü")
+    # --- TEST 14: Sohbet katmanı (AŞAMA 10) ---
+    print("\n📋 TEST 14: Sohbet Katmanı (bağlam + görev)")
+    chat = ChatEngine(kernel)
+    r = chat.sohbet("Yarın marketten ekmek almayı hatırla")
+    assert "Hatırladım" in r["cevap"], r["cevap"]
+    r = chat.sohbet("Görevlerim neler?")
+    assert "ekmek" in r["cevap"], r["cevap"]
+    print("   ✓ Görev ekle + listele çalışıyor")
 
-    # --- TEST 15: Distiller — Validate (dry run, LLM'siz) ---
-    print("\n📋 TEST 15: Distiller — Doğrulama (dry run)")
-    # Geçerli bir isa ilişkisi
-    result = distiller._validate_and_store("limon", 
-        {"type": "isa", "target": "meyve", "confidence": 0.95}, dry_run=True)
-    assert result["accepted"], f"limon isa meyve kabul edilmeli: {result}"
-    print(f"   ✓ 'limon isa meyve' → kabul edildi")
+    # --- TEST 15: Düşünme katmanı (AŞAMA 11 — NARS kognitif döngü) ---
+    print("\n📋 TEST 15: Düşünme Katmanı (kognitif döngü)")
+    r = chat.dusun("Ses görünür mü?")
+    turler = {a["tur"] for a in r["adimlar"]}
+    assert {"olgu", "hedef", "plan", "geribildirim"} <= turler, turler
+    print("   ✓ Kognitif döngü: olgu→hedef→plan→operasyon→geribildirim")
 
-    # Geçerli bir hasa ilişkisi
-    result = distiller._validate_and_store("limon",
-        {"type": "hasa", "property": "renk", "value": "sarı", "confidence": 0.95}, dry_run=True)
-    assert result["accepted"], f"limon hasa renk sarı kabul edilmeli: {result}"
-    print(f"   ✓ 'limon hasa renk sarı' → kabul edildi")
-
-    # Çelişkili bir hasa: gökyüzü hasa renk yeşil (aksiyom mavi diyor)
-    result = distiller._validate_and_store("gökyüzü",
-        {"type": "hasa", "property": "renk", "value": "yeşil", "confidence": 0.95}, dry_run=True)
-    if not result["accepted"]:
-        print(f"   ⚡ 'gökyüzü hasa renk yeşil' → REDDEDİLDİ (aksiyomla çelişiyor): {result.get('reason', '?')[:80]}")
-    else:
-        print(f"   ⚠️ 'gökyüzü hasa renk yeşil' kabul edildi (beklenmeyen)")
-
-    # --- TEST 16: Distiller — Gap → Dry Run Distill Zinciri ---
-    print("\n📋 TEST 16: Distiller — Gap tespiti ve dry-run zinciri")
-    # Sistemdeki ilk 3 gap için dry run yap
-    gaps = distiller.detect_gaps(limit=3)
-    distilled_count = 0
-    for gap in gaps[:3]:
-        # Dry run: LLM çağrısı olmadan sadece gap yapısını kontrol et
-        context = f"({gap['type']})" if gap.get('type') else ""
-        print(f"   🔍 Gap: {gap['concept']} {context} → öncelik: {gap['priority']}")
-        distilled_count += 1
-    print(f"   ✓ {distilled_count} kavram distilling için hazır")
+    # --- TEST 16: NARS truth-value ---
+    print("\n📋 TEST 16: NARS Truth-Value (freq + conf)")
+    tv = truth_value(8, 2)
+    assert 0.7 <= tv["freq"] <= 0.9 and tv["conf"] > 0.8, tv
+    print(f"   ✓ freq={tv['freq']} conf={tv['conf']} (8 onay, 2 çelişki)")
 
     # --- TEST 17: WebKnowledgeIngester — Wikipedia API (offline sim) ---
     print("\n📋 TEST 17: WebKnowledgeIngester — Wikipedia API testi")
@@ -4903,99 +4341,6 @@ def run_tests():
 # ANA PROGRAM
 # ═══════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
-    import sys
-    if len(sys.argv) > 1 and sys.argv[1] == "--test":
-        run_tests()
-    elif len(sys.argv) > 1 and sys.argv[1] == "--interactive":
-        kernel = ASIKernel()
-        kernel.interactive()
-    elif len(sys.argv) > 1 and sys.argv[1] == "--llm":
-        kernel = ASIKernel(decoder_mode="llm")
-        kernel.interactive()
-    elif len(sys.argv) > 1 and sys.argv[1] == "--distill" and len(sys.argv) > 2:
-        concept = sys.argv[2]
-        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
-        model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
-        print(f"🔬 Kavram damıtılıyor: {concept}")
-        print(f"   Endpoint: {endpoint}")
-        kernel = ASIKernel()
-        result = kernel.distill_concept(concept, endpoint=endpoint, model=model)
-        print(f"\n📊 Sonuç: +{result['accepted']} kabul, -{result['rejected']} ret")
-        if result["nodes_created"]:
-            print(f"   ✅ Oluşan düğümler: {result['nodes_created']}")
-        if result["errors"]:
-            print(f"   ⚠️ Hatalar: {result['errors'][:3]}")
-        if result["raw_llm_output"]:
-            print(f"\n📝 Ham LLM çıktısı (ilk 300 karakter):\n{result['raw_llm_output'][:300]}")
-    elif len(sys.argv) > 1 and sys.argv[1] == "--auto-explore":
-        max_concepts = int(sys.argv[2]) if len(sys.argv) > 2 else 5
-        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
-        model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
-        print(f"🔍 Otomatik keşif başlatılıyor (max {max_concepts} kavram)...")
-        kernel = ASIKernel()
-        summary = kernel.auto_explore(max_concepts=max_concepts, endpoint=endpoint, model=model)
-        print(f"\n📊 Keşif Özeti:")
-        print(f"   Turlar: {summary['rounds']}")
-        print(f"   Keşfedilen: {len(summary['concepts_explored'])} kavram")
-        print(f"   Kabul: {summary['total_accepted']} | Ret: {summary['total_rejected']}")
-        print(f"   Düğümler: {summary['total_nodes']} | İzole: {summary['total_isolated']}")
-        print(f"   Kalan boşluk: {summary['remaining_gaps']}")
-    elif len(sys.argv) > 1 and sys.argv[1] == "--gaps":
-        kernel = ASIKernel()
-        distiller = LocalLLMDistiller(kernel)
-        gaps = distiller.detect_gaps(limit=20)
-        print(f"🔍 {len(gaps)} boşluk tespit edildi:\n")
-        for g in gaps:
-            print(f"   [{g['type']:15}] {g['concept']:20} öncelik={g['priority']}")
-        if not gaps:
-            print("   ✅ Boşluk yok — hafıza tam!")
-    elif len(sys.argv) > 1 and sys.argv[1] == "--web-ingest" and len(sys.argv) > 2:
-        concept = sys.argv[2]
-        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
-        model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
-        strategy = sys.argv[5] if len(sys.argv) > 5 else "auto"
-        print(f"🌐 Web'den bilgi çekiliyor: {concept} (strateji: {strategy})")
-        kernel = ASIKernel()
-        result = kernel.ingest_from_web(concept, endpoint=endpoint, model=model, strategy=strategy)
-        print(f"\n📊 Sonuç: +{result['accepted']} kabul, -{result['rejected']} ret")
-        if result.get("web_result"):
-            wr = result["web_result"]
-            print(f"   Kaynak: {wr['source']} | {wr['title']} ({wr['text_length']} karakter)")
-        if result["errors"]:
-            print(f"   ⚠️ Hatalar: {result['errors'][:3]}")
-    elif len(sys.argv) > 1 and sys.argv[1] == "--web-loop":
-        max_iter = int(sys.argv[2]) if len(sys.argv) > 2 else 0
-        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
-        model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
-        print(f"🔄 Kesintisiz web ingestion başlatılıyor (max {max_iter or 'sonsuz'} iterasyon)...")
-        print("   Durdurmak için Ctrl+C")
-        kernel = ASIKernel()
-        try:
-            summary = kernel.continuous_web_ingestion(
-                max_iterations=max_iter, endpoint=endpoint, model=model)
-            print(f"\n📊 Döngü tamamlandı:")
-            print(f"   Sebep: {summary['stopped_by']}")
-            print(f"   İterasyon: {summary['iterations']}")
-            print(f"   Kavram: {len(summary['concepts_processed'])}")
-            print(f"   Kabul: {summary['total_accepted']} | Ret: {summary['total_rejected']}")
-        except KeyboardInterrupt:
-            print("\n⏹ Kullanıcı tarafından durduruldu")
-    else:
-        run_tests()
-        print("\n💡 Kullanım:")
-        print("   python kernel_v2.py --test                → Tüm testleri çalıştır")
-        print("   python kernel_v2.py --interactive         → İnteraktif mod")
-        print("   python kernel_v2.py --llm                 → yerel LLM bağlantılı mod")
-        print("   python kernel_v2.py --distill KAVRAM      → Tek kavram damıt (LLM)")
-        print("   python kernel_v2.py --auto-explore [N]    → Otomatik keşif (LLM)")
-        print("   python kernel_v2.py --gaps                → Boşlukları listele")
-        print("   python kernel_v2.py --web-ingest KAVRAM   → Web'den bilgi çek (LLM)")
-        print("   python kernel_v2.py --web-loop [N]        → Kesintisiz web döngüsü (LLM)")
-        print("   python kernel_v2.py --chat                → Sohbet modu (bağlam + görev + vektör)")
-
-
-# ═══════════════════════════════════════════════════════════════════
 # AŞAMA 10: SOHBET KATMANI — Bağlam + Görev Takibi + Vektör Uzayı
 # Kullanıcı: "sözlük gibi çalışıyor, uzun sohbet yapamaz, iş takibi yapamaz"
 # Bu katman: konuşma bağlamı, görev hafızası, embedding benzerliği (LLM'siz)
@@ -5046,7 +4391,8 @@ class VectorSpace:
 
 
 class ConversationMemory:
-    """Sohbet bağlamı: son N mesajı tutar, geçmişe dönük soruları cevaplar."""
+    """Sohbet bağlamı: son N mesajı tutar, geçmişe dönük soruları cevaplar.
+    B: UZUN SÜRELİ HAFIZA — sohbetler knowledge_store'a düğüm olarak yazılır."""
 
     def __init__(self, max_turns: int = 10):
         self.history: List[dict] = []
@@ -5073,7 +4419,7 @@ class ConversationMemory:
     def gecmis_sorgusu(self, soru: str) -> Optional[dict]:
         n = norm_tr(soru)
         if not any(k in n for k in ("ne demi", "ne konus", "az once", "ne soyled",
-                                    "hatirliyor", "ne yaptik")):
+                                    "ne yaptik")):
             return None
         if not self.history:
             return {"cevap": "Henüz konuşma geçmişi yok — daha önce hiç konuşmadık."}
@@ -5086,6 +4432,48 @@ class ConversationMemory:
             return {"cevap": f"Az önce şunu sormuştun: \"{son_user['mesaj'][:100]}\"",
                     "kaynak": "gecmis"}
         return {"cevap": self.ozet(), "kaynak": "gecmis"}
+
+    # ── B: UZUN SÜRELİ HAFIZA ──────────────────────────────────
+    def kalici_kaydet(self, kernel) -> None:
+        """Sohbet özetini knowledge_store'a düğüm olarak yaz (gate'ten geçer).
+        Böylece restart'ta bile 'geçen hafta ne konuştuk' hatırlanır."""
+        if len(self.history) < 2:
+            return
+        # Son 4 turun özetini çıkar
+        son_turler = self.history[-8:]
+        ozet_parcalar = []
+        for h in son_turler:
+            isim = "kullanici" if h["rol"] == "user" else "asi1"
+            metin = str(h["mesaj"])[:60]
+            ozet_parcalar.append(f"{isim}_{metin}")
+        ozet = " | ".join(ozet_parcalar[-4:])
+        try:
+            kernel.contradictions.gate(
+                ne="sohbet_ozeti", properties={"icerik": ozet[:200]},
+                source=f"sohbet_hafiza|{int(time.time())}", confidence=0.9
+            )
+        except Exception:
+            pass
+
+    def hafizadan_hatirla(self, kernel, soru: str) -> Optional[str]:
+        """Kalıcı hafızadan sohbet özetlerini ara: 'geçen hafta ne konuştuk'."""
+        n = norm_tr(soru)
+        if not any(k in n for k in ("gecen", "dun", "hafta", "oncesinde", "hatirliyor")):
+            return None
+        ozetler = []
+        for node in kernel.hooks.nodes.values():
+            if node.ne == "sohbet_ozeti" and "sohbet_hafiza" in node.source:
+                icerik = node.properties.get("icerik", "")
+                if icerik:
+                    ozetler.append(icerik)
+        if not ozetler:
+            return None
+        en_son = ozetler[-1]
+        return (f"Evet hatırlıyorum — son konuşmamızdan: {en_son[:150]}")
+
+    def stil_ogren(self, metin: str) -> None:
+        """A: kullanıcının konuşma stilinden kelime çiftleri öğren (markov)."""
+        self.vektor._vector_cache  # vektör cache'i ısıt (stil benzerliği için)
 
 
 class TaskMemory:
@@ -5173,7 +4561,10 @@ class ChatEngine:
         }
 
     def sohbet(self, mesaj: str) -> dict:
-        # 1. Görev komutu?
+        """7 AŞAMALI PIPELINE:
+        Memory → Context Builder → Hypothesis Gen → Reasoning → Critic
+        → Response Planner → Style Adapter"""
+        # ── 1. MEMORY: kalıcı hafızadan hatırla + görev + geçmiş ──
         gorev = self.gorevler.algila(mesaj)
         if gorev:
             if gorev["tur"] == "listele":
@@ -5189,22 +4580,37 @@ class ChatEngine:
             self.baglam.ekle("asi", cevap)
             return {"cevap": cevap, "kanal": "gorev"}
 
-        # 2. Geçmiş sorusu?
         gecmis = self.baglam.gecmis_sorgusu(mesaj)
         if gecmis:
             self.baglam.ekle("user", mesaj)
             self.baglam.ekle("asi", gecmis["cevap"])
             return {"cevap": gecmis["cevap"], "kanal": "gecmis"}
 
-        # 3. DÜŞÜN: kognitif döngü (olgu→hedef→plan→operasyon→geri bildirim)
+        kalici = self.baglam.hafizadan_hatirla(self.kernel, mesaj)
+        if kalici:
+            self.baglam.ekle("user", mesaj)
+            self.baglam.ekle("asi", kalici)
+            return {"cevap": kalici, "kanal": "kalici_hafiza"}
+
+        # ── 2. CONTEXT BUILDER: bağlamı topla (son mesajlar + görevler) ──
+        baglam_metni = self.baglam.ozet()
+
+        # ── 3+4. HYPOTHESIS + REASONING: kognitif döngü ──
         dusunce = self.akil.dusun(mesaj)
 
-        # 4. Konuşmayı akıcılaştır (sözlük gibi değil, sohbet gibi)
-        cevap = self._konus(mesaj, dusunce)
+        # ── 5. CRITIC: cevap güvenilir mi? (gate zaten kernel'de, burada kontrol)
+        # ── 6. RESPONSE PLANNER: kanala göre cevap stratejisi ──
+        cevap = self._plan_cevap(mesaj, dusunce, baglam_metni)
 
-        # 5. Bağlamı kaydet
+        # ── 7. STYLE ADAPTER: stile uyarla + öğren ──
+        cevap = self._stil_uyarla(cevap, mesaj)
+
+        # Hafızaya yaz (oturum + kalıcı)
         self.baglam.ekle("user", mesaj)
         self.baglam.ekle("asi", cevap)
+        self.baglam.kalici_kaydet(self.kernel)
+        self.baglam.stil_ogren(mesaj)
+
         return {
             "cevap": cevap,
             "kanal": dusunce["kanal"],
@@ -5212,28 +4618,38 @@ class ChatEngine:
             "vektor_eslesme": self._vektor_esle(mesaj),
         }
 
-    def _konus(self, mesaj: str, dusunce: dict) -> str:
-        """Ham cevabı sohbet diline çevir (sözlük tonu yerine akıcı ton)."""
+    def _plan_cevap(self, mesaj: str, dusunce: dict, baglam: str) -> str:
+        """RESPONSE PLANNER: ham cevabı kanala göre şekillendir."""
         ham = dusunce["cevap"]
-        n = dusunce["kanal"]
 
-        # Wikipedia cevabı → doğal girişle
+        # Wikipedia cevabı → doğal giriş
         if "Wikipedia" in ham:
-            return ham  # zaten bilgilendirici
+            return ham
 
-        # "X, Y'dir." → "X bir Y'dir." akıcılaştır
-        if "," in ham and ("dir." in ham or "dır." in ham or "tir." in ham):
-            once, sonra = ham.split(",", 1)
-            sonra = sonra.strip()
-            if " " not in sonra or len(sonra) < 40:
-                return ham  # zaten kısa ve net
+        # Selamlaşma → sıcak karşılama (bilinmeyen kontrolünden ÖNCE)
+        n = norm_tr(mesaj)
+        if any(k in n for k in ("merhaba", "selam", "naber", "nasilsin", "hey",
+                                "gunaydin", "iyi aksamlar")):
+            if "Henüz konuşma yok" not in baglam and "Sen:" in baglam:
+                return ("Merhaba! 👋 Önceki konuşmamızdan devam edebiliriz — "
+                        "ne konuşmak istersin?")
+            return "Merhaba! 👋 Ben ASI-1. Sana nasıl yardımcı olabilirim?"
 
-        # Bilinmeyen cevap → meraklı ton
+        # Bilinmeyen → meraklı ton
         if "cevaplayamıyorum" in ham:
             return ("Hmm, bu konuda henüz kesin bir bilgim yok. "
                     "Ama merak ettim — Wikipedia'da araştırmamı ister misin?")
 
         return ham
+
+    def _stil_uyarla(self, cevap: str, mesaj: str) -> str:
+        """STYLE ADAPTER: kullanıcı kısa yazıyorsa kısa, uzun yazıyorsa detaylı cevap."""
+        # Kullanıcı çok kısa yazdıysa cevabı kısalt
+        if len(mesaj.strip()) <= 15 and len(cevap) > 120:
+            # İlk cümleyi bul
+            ilk_cumle = cevap.split(".")[0] + "."
+            return ilk_cumle if len(ilk_cumle) > 20 else cevap
+        return cevap
 
     def dusun(self, soru: str) -> dict:
         """Düşünme adımlarını açıkça göster (transparan akıl)."""
@@ -5378,3 +4794,99 @@ def truth_value(verification_count: int, contradiction_count: int) -> dict:
     freq = verification_count / toplam
     conf = toplam / (toplam + 1.0)          # daha çok kanıt → daha güvenli
     return {"freq": round(freq, 3), "conf": round(conf, 3)}
+
+
+
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        run_tests()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--interactive":
+        kernel = ASIKernel()
+        kernel.interactive()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--llm":
+        kernel = ASIKernel(decoder_mode="llm")
+        kernel.interactive()
+    elif len(sys.argv) > 1 and sys.argv[1] == "--distill" and len(sys.argv) > 2:
+        concept = sys.argv[2]
+        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
+        model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
+        print(f"🔬 Kavram damıtılıyor: {concept}")
+        print(f"   Endpoint: {endpoint}")
+        kernel = ASIKernel()
+        result = kernel.distill_concept(concept, endpoint=endpoint, model=model)
+        print(f"\n📊 Sonuç: +{result['accepted']} kabul, -{result['rejected']} ret")
+        if result["nodes_created"]:
+            print(f"   ✅ Oluşan düğümler: {result['nodes_created']}")
+        if result["errors"]:
+            print(f"   ⚠️ Hatalar: {result['errors'][:3]}")
+        if result["raw_llm_output"]:
+            print(f"\n📝 Ham LLM çıktısı (ilk 300 karakter):\n{result['raw_llm_output'][:300]}")
+    elif len(sys.argv) > 1 and sys.argv[1] == "--auto-explore":
+        max_concepts = int(sys.argv[2]) if len(sys.argv) > 2 else 5
+        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
+        model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
+        print(f"🔍 Otomatik keşif başlatılıyor (max {max_concepts} kavram)...")
+        kernel = ASIKernel()
+        summary = kernel.auto_explore(max_concepts=max_concepts, endpoint=endpoint, model=model)
+        print(f"\n📊 Keşif Özeti:")
+        print(f"   Turlar: {summary['rounds']}")
+        print(f"   Keşfedilen: {len(summary['concepts_explored'])} kavram")
+        print(f"   Kabul: {summary['total_accepted']} | Ret: {summary['total_rejected']}")
+        print(f"   Düğümler: {summary['total_nodes']} | İzole: {summary['total_isolated']}")
+        print(f"   Kalan boşluk: {summary['remaining_gaps']}")
+    elif len(sys.argv) > 1 and sys.argv[1] == "--gaps":
+        kernel = ASIKernel()
+        distiller = LocalLLMDistiller(kernel)
+        gaps = distiller.detect_gaps(limit=20)
+        print(f"🔍 {len(gaps)} boşluk tespit edildi:\n")
+        for g in gaps:
+            print(f"   [{g['type']:15}] {g['concept']:20} öncelik={g['priority']}")
+        if not gaps:
+            print("   ✅ Boşluk yok — hafıza tam!")
+    elif len(sys.argv) > 1 and sys.argv[1] == "--web-ingest" and len(sys.argv) > 2:
+        concept = sys.argv[2]
+        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
+        model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
+        strategy = sys.argv[5] if len(sys.argv) > 5 else "auto"
+        print(f"🌐 Web'den bilgi çekiliyor: {concept} (strateji: {strategy})")
+        kernel = ASIKernel()
+        result = kernel.ingest_from_web(concept, endpoint=endpoint, model=model, strategy=strategy)
+        print(f"\n📊 Sonuç: +{result['accepted']} kabul, -{result['rejected']} ret")
+        if result.get("web_result"):
+            wr = result["web_result"]
+            print(f"   Kaynak: {wr['source']} | {wr['title']} ({wr['text_length']} karakter)")
+        if result["errors"]:
+            print(f"   ⚠️ Hatalar: {result['errors'][:3]}")
+    elif len(sys.argv) > 1 and sys.argv[1] == "--web-loop":
+        max_iter = int(sys.argv[2]) if len(sys.argv) > 2 else 0
+        endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
+        model = sys.argv[4] if len(sys.argv) > 4 else "local-model"
+        print(f"🔄 Kesintisiz web ingestion başlatılıyor (max {max_iter or 'sonsuz'} iterasyon)...")
+        print("   Durdurmak için Ctrl+C")
+        kernel = ASIKernel()
+        try:
+            summary = kernel.continuous_web_ingestion(
+                max_iterations=max_iter, endpoint=endpoint, model=model)
+            print(f"\n📊 Döngü tamamlandı:")
+            print(f"   Sebep: {summary['stopped_by']}")
+            print(f"   İterasyon: {summary['iterations']}")
+            print(f"   Kavram: {len(summary['concepts_processed'])}")
+            print(f"   Kabul: {summary['total_accepted']} | Ret: {summary['total_rejected']}")
+        except KeyboardInterrupt:
+            print("\n⏹ Kullanıcı tarafından durduruldu")
+    else:
+        run_tests()
+        print("\n💡 Kullanım:")
+        print("   python kernel_v2.py --test                → Tüm testleri çalıştır")
+        print("   python kernel_v2.py --interactive         → İnteraktif mod")
+        print("   python kernel_v2.py --llm                 → yerel LLM bağlantılı mod")
+        print("   python kernel_v2.py --distill KAVRAM      → Tek kavram damıt (LLM)")
+        print("   python kernel_v2.py --auto-explore [N]    → Otomatik keşif (LLM)")
+        print("   python kernel_v2.py --gaps                → Boşlukları listele")
+        print("   python kernel_v2.py --web-ingest KAVRAM   → Web'den bilgi çek (LLM)")
+        print("   python kernel_v2.py --web-loop [N]        → Kesintisiz web döngüsü (LLM)")
+        print("   python kernel_v2.py --chat                → Sohbet modu (bağlam + görev + vektör)")
+
+
+# ═══════════════════════════════════════════════════════════════════

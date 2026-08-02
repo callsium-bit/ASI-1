@@ -21,8 +21,7 @@ sys.path.insert(0, SCRIPT_DIR)
 from kernel_v2 import (
     ASIKernel, CrystalNode, HookEngine, AxiomEngine,
     ContradictionEngine, FastPathValidator, StreamingIngestionPipeline,
-    UnresolvedQueue, KnowledgeStore, EntityType, TurkishParser,
-    LocalLLMDistiller
+    UnresolvedQueue, KnowledgeStore, EntityType, TurkishParser
 )
 
 PASS = 0

@@ -33,7 +33,7 @@ from PySide6.QtGui import (
     QFont, QColor, QPalette, QIcon, QTextCursor
 )
 
-from kernel_v2 import ASIKernel, LocalLLMDistiller
+from kernel_v2 import ASIKernel
 
 
 # ═══════════════════════════════════════════════════════
@@ -117,13 +117,8 @@ class KernelWorker(QThread):
         self._handle_status()
 
     def _handle_distill(self, concept: str, endpoint: str, model: str):
-        if not self.kernel:
-            return
-        self.log_signal.emit(f"🔬 Damıtılıyor: {concept}", "info")
-        self.progress_signal.emit(0, 1)
-
-        try:
-            result = self.kernel.distill_concept(concept, endpoint=endpoint, model=model)
+        """LLM damıtma KALDIRILDI — sistem saf sembolik."""
+        return {"accepted": 0, "note": "LLM kaldırıldı"}
             self.log_signal.emit(f"   +{result['accepted']} kabul, -{result['rejected']} ret", 
                                "success" if result['accepted'] > 0 else "warn")
             for err in result.get('errors', [])[:3]:
@@ -135,13 +130,8 @@ class KernelWorker(QThread):
         self._handle_status()
 
     def _handle_auto_explore(self, max_concepts: int, endpoint: str, model: str):
-        if not self.kernel:
-            return
-        self.log_signal.emit(f"🔍 Otomatik keşif (max {max_concepts} kavram)...", "info")
-
-        try:
-            summary = self.kernel.auto_explore(
-                max_concepts=max_concepts, endpoint=endpoint, model=model
+        """LLM damıtma KALDIRILDI — sistem saf sembolik."""
+        return {"accepted": 0, "note": "LLM kaldırıldı"}
             )
             self.log_signal.emit(
                 f"   ✅ Keşif tamam: {summary['total_accepted']} kabul, "
@@ -156,7 +146,7 @@ class KernelWorker(QThread):
     def _handle_gaps(self):
         if not self.kernel:
             return
-        distiller = LocalLLMDistiller(self.kernel)
+        distiller = None
         gaps = distiller.detect_gaps(limit=30)
         self.status_signal.emit({
             "type": "gaps_update",
