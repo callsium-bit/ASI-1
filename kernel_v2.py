@@ -4488,7 +4488,10 @@ class TaskMemory:
         if any(k in n for k in ("gorevlerim", "gorevler neler", "yapilacaklar", "hatirlatm")):
             return {"tur": "listele"}
         # ÖNCE kapat: "X'i unut", "X'i sil", "X görevini unut"
-        if "sil" in n or ("un" in n and "ut" in n):
+        # DİKKAT: "sil" kelime bazlı — "nasılsın" içindeki "sil" alt dizesi tetiklenmesin
+        kelimeler = set(n.split())
+        sil_kelime = "sil" in kelimeler or "silebilir" in n or "sileyim" in n
+        if (sil_kelime or ("un" in n and "ut" in n and "nasilsin" not in n)):
             # İlk anlamlı kelimeyi ara: "ekmek görevini unut" → "ekmek"
             metin = self._ilk_kelime(mesaj)
             if metin:
@@ -4622,21 +4625,33 @@ class ChatEngine:
         """RESPONSE PLANNER: ham cevabı kanala göre şekillendir."""
         ham = dusunce["cevap"]
 
-        # Wikipedia cevabı → doğal giriş
-        if "Wikipedia" in ham:
+        # Wikipedia cevabı → doğal giriş (bulunamadı hatası değilse)
+        if "Wikipedia" in ham and "bulunamadı" not in ham:
             return ham
 
         # Selamlaşma → sıcak karşılama (bilinmeyen kontrolünden ÖNCE)
         n = norm_tr(mesaj)
-        if any(k in n for k in ("merhaba", "selam", "naber", "nasilsin", "hey",
+        if any(k in n for k in ("merhaba", "selam", "naber", "hey",
                                 "gunaydin", "iyi aksamlar")):
             if "Henüz konuşma yok" not in baglam and "Sen:" in baglam:
                 return ("Merhaba! 👋 Önceki konuşmamızdan devam edebiliriz — "
                         "ne konuşmak istersin?")
             return "Merhaba! 👋 Ben ASI-1. Sana nasıl yardımcı olabilirim?"
 
+        # Kişisel bilgi → kişilik profili (kendi kimliği)
+        if any(k in n for k in ("adin ne", "adiniz ne", "kimsin", "kendini tanit",
+                                "ne isin", "nesin sen")):
+            return ("Ben ASI-1 — saf sembolik bir yapay zekâ. "
+                    "LLM kullanmıyorum; aksiyomlar, ilişki grafiği ve "
+                    "türetim motoruyla düşünüyorum. Dürüst olmaya çalışıyorum: "
+                    "bilmediğim şeyi bilmiyorum derim.")
+        if "kac yasindasin" in n or "ne zaman dogdun" in n:
+            return "Ben doğmadım — 2026 yazında kavramlardan inşa edildim. 😄"
+        if "nasilsin" in n:
+            return "İyiyim! Bir sürü kavram öğreniyorum, arka planda eğitim sürüyor. Sen nasılsın?"
+
         # Bilinmeyen → meraklı ton
-        if "cevaplayamıyorum" in ham:
+        if "cevaplayamıyorum" in ham or "bulunamadı" in ham:
             return ("Hmm, bu konuda henüz kesin bir bilgim yok. "
                     "Ama merak ettim — Wikipedia'da araştırmamı ister misin?")
 
