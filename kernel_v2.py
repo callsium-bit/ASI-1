@@ -5157,15 +5157,23 @@ class TaskMemory:
 
 
 class ChatEngine:
-    """Sohbet orkestratörü: bağlam + görev + vektör + kernel'i birleştirir."""
+    """Sohbet orkestratörü: bağlam + görev + vektör + düşünme + kernel.
+    NARS-JARVIS mimarisi: sembolik çekirdek dürüst tutar, konuşma akıcıdır."""
 
     def __init__(self, kernel):
         self.kernel = kernel
         self.baglam = ConversationMemory()
         self.gorevler = TaskMemory()
         self.vektor = VectorSpace()
+        self.akil = ReasoningEngine(kernel)
+        self.kisilik = {
+            "ad": "ASI-1",
+            "ton": "sıcak ve meraklı",
+            "oncelik": "önce dürüstlük, sonra yardım",
+        }
 
     def sohbet(self, mesaj: str) -> dict:
+        # 1. Görev komutu?
         gorev = self.gorevler.algila(mesaj)
         if gorev:
             if gorev["tur"] == "listele":
@@ -5181,19 +5189,64 @@ class ChatEngine:
             self.baglam.ekle("asi", cevap)
             return {"cevap": cevap, "kanal": "gorev"}
 
+        # 2. Geçmiş sorusu?
         gecmis = self.baglam.gecmis_sorgusu(mesaj)
         if gecmis:
             self.baglam.ekle("user", mesaj)
             self.baglam.ekle("asi", gecmis["cevap"])
             return {"cevap": gecmis["cevap"], "kanal": "gecmis"}
 
-        vektor_sonuc = self._vektor_esle(mesaj)
-        kernel_cevap = self.kernel.ask(mesaj)
-        cevap = str(kernel_cevap.get("answer", kernel_cevap))
+        # 3. DÜŞÜN: kognitif döngü (olgu→hedef→plan→operasyon→geri bildirim)
+        dusunce = self.akil.dusun(mesaj)
 
+        # 4. Konuşmayı akıcılaştır (sözlük gibi değil, sohbet gibi)
+        cevap = self._konus(mesaj, dusunce)
+
+        # 5. Bağlamı kaydet
         self.baglam.ekle("user", mesaj)
         self.baglam.ekle("asi", cevap)
-        return {"cevap": cevap, "kanal": "kernel", "vektor_eslesme": vektor_sonuc}
+        return {
+            "cevap": cevap,
+            "kanal": dusunce["kanal"],
+            "adimlar": dusunce["adimlar"],
+            "vektor_eslesme": self._vektor_esle(mesaj),
+        }
+
+    def _konus(self, mesaj: str, dusunce: dict) -> str:
+        """Ham cevabı sohbet diline çevir (sözlük tonu yerine akıcı ton)."""
+        ham = dusunce["cevap"]
+        n = dusunce["kanal"]
+
+        # Wikipedia cevabı → doğal girişle
+        if "Wikipedia" in ham:
+            return ham  # zaten bilgilendirici
+
+        # "X, Y'dir." → "X bir Y'dir." akıcılaştır
+        if "," in ham and ("dir." in ham or "dır." in ham or "tir." in ham):
+            once, sonra = ham.split(",", 1)
+            sonra = sonra.strip()
+            if " " not in sonra or len(sonra) < 40:
+                return ham  # zaten kısa ve net
+
+        # Bilinmeyen cevap → meraklı ton
+        if "cevaplayamıyorum" in ham:
+            return ("Hmm, bu konuda henüz kesin bir bilgim yok. "
+                    "Ama merak ettim — Wikipedia'da araştırmamı ister misin?")
+
+        return ham
+
+    def dusun(self, soru: str) -> dict:
+        """Düşünme adımlarını açıkça göster (transparan akıl)."""
+        return self.akil.dusun(soru)
+
+    def durum(self) -> dict:
+        return {
+            **self.akil.durum(),
+            "baglam_turn": len(self.baglam.history) // 2,
+            "gorev_acik": len(self.gorevler.liste()),
+            "gorev_toplam": len(self.gorevler.gorevler),
+            "vektor_ornek_sayi": len(self.vektor._vector_cache),
+        }
 
     def _vektor_esle(self, mesaj: str) -> Optional[dict]:
         kavramlar = []
@@ -5218,3 +5271,110 @@ class ChatEngine:
             "gorev_toplam": len(self.gorevler.gorevler),
             "vektor_ornek_sayi": len(self.vektor._vector_cache),
         }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# AŞAMA 11: DÜŞÜNME KATMANI — NARS esinli kognitif döngü + akıcı konuşma
+# Kaynak: OpenNARS (truth-value) + NARS-JARVIS (LLM konuşur, sembolik dürüst tutar)
+# Kognitif döngü: OLGU → HEDEF → PLAN → OPERASYON → GERİ BİLDİRİM
+# ═══════════════════════════════════════════════════════════════════
+
+class ReasoningEngine:
+    """Çok adımlı düşünme: soruyu parçala, plan kur, adım adım çöz, birleştir.
+    NARS esinli: her çözüm adımı izlenir (transparan düşünme)."""
+
+    def __init__(self, kernel):
+        self.kernel = kernel
+        self.dusunce_log: List[dict] = []
+        self.cikarim_sayisi = 0
+
+    def dusun(self, soru: str) -> dict:
+        """Soru üzerinde 5 adımlı kognitif döngü çalıştır."""
+        adimlar = []
+        norm = self.kernel.axioms._normalize_tr
+        q = norm(soru)
+
+        # 1. OLGU
+        adimlar.append({"tur": "olgu", "icerik": soru})
+
+        # 2. HEDEF belirle
+        if any(t in q for t in ("nedir", "kimdir", "neymiş", "anlamı")):
+            hedef = "kavram_tanimi"
+        elif any(t in q for t in ("neden", "niçin", "nasıl olur")):
+            hedef = "nedensellik"
+        elif any(t in q for t in ("nerede", "nereye", "hangi ülke")):
+            hedef = "konum"
+        elif any(t in q for t in ("mi", "mı", "mu", "mü", "olur mu", "edebilir")):
+            hedef = "dogrulama"
+        else:
+            hedef = "kavram_tanimi"
+        adimlar.append({"tur": "hedef", "icerik": hedef})
+
+        # 3. PLAN: kavramları çıkar, kaynakları sırala
+        stop = {"nedir", "kimdir", "neden", "niçin", "nerede", "nereye", "nasıl",
+                "ne", "bir", "mi", "mı", "mu", "mü", "kaç", "hangi", "ne zaman",
+                "niye", "neymiş", "olur", "edebilir", "görebilir", "mıdır", "midir"}
+        kavramlar = [w for w in q.split() if len(w) > 2 and w not in stop][:3]
+        plan = []
+        if kavramlar:
+            plan.append({"kaynak": "bilgi_tabani", "veri": list(kavramlar)})
+        plan.append({"kaynak": "cikarim", "veri": soru})
+        plan.append({"kaynak": "arastirma", "veri": soru})
+        adimlar.append({"tur": "plan", "icerik": [p["kaynak"] for p in plan]})
+
+        # 4. OPERASYON: sırayla dene
+        cevap = None
+        kanal = None
+        for p in plan:
+            if p["kaynak"] == "bilgi_tabani":
+                r = self.kernel.ask(soru)
+                c = str(r.get("answer", r))
+                if c and "cevaplayamıyorum" not in c and "bulunamadı" not in c:
+                    cevap = c
+                    kanal = "bilgi_tabani"
+                    self.cikarim_sayisi += 1
+                    adimlar.append({"tur": "operasyon", "icerik": f"Bilgi tabanı: {c[:70]}"})
+                    break
+            elif p["kaynak"] == "cikarim":
+                # Aksiyom/çıkarım zinciri dene
+                hipotezler = self.kernel.relations.derive_hypotheses(
+                    kavramlar[0] if kavramlar else soru, max_depth=2)
+                if hipotezler:
+                    self.cikarim_sayisi += 1
+                    adimlar.append({"tur": "operasyon",
+                                    "icerik": f"Türetim: {len(hipotezler)} hipotez"})
+                # Çözüm bulunamazsa bilgi tabanı cevabını kullan
+                if cevap is None:
+                    r = self.kernel.ask(soru)
+                    c = str(r.get("answer", r))
+                    if c and "cevaplayamıyorum" not in c:
+                        cevap = c
+                        kanal = "cikarim"
+                        adimlar.append({"tur": "operasyon", "icerik": f"Çıkarım: {c[:70]}"})
+                        break
+
+        # 5. GERİ BİLDİRİM
+        if cevap is None:
+            adimlar.append({"tur": "geribildirim", "icerik": "Çözülemedi — araştırma kanalı"})
+            cevap = "Bu soruyu şu an kesin cevaplayamıyorum. Araştırmam gerekiyor."
+            kanal = "belirsiz"
+        else:
+            adimlar.append({"tur": "geribildirim", "icerik": "Çözüldü"})
+
+        kayit = {"soru": soru, "hedef": hedef, "kanal": kanal, "adimlar": adimlar}
+        self.dusunce_log.append(kayit)
+        return {"cevap": cevap, "kanal": kanal, "adimlar": adimlar}
+
+    def durum(self) -> dict:
+        return {"cikarim": self.cikarim_sayisi, "log": len(self.dusunce_log)}
+
+
+def truth_value(verification_count: int, contradiction_count: int) -> dict:
+    """NARS truth-value: frequency + confidence (0-1).
+    freq = onay oranı, conf = ne kadar çok kanıt olduğu."""
+    toplam = verification_count + contradiction_count
+    if toplam == 0:
+        return {"freq": 0.5, "conf": 0.0}   # bilinmiyor
+    freq = verification_count / toplam
+    conf = toplam / (toplam + 1.0)          # daha çok kanıt → daha güvenli
+    return {"freq": round(freq, 3), "conf": round(conf, 3)}
