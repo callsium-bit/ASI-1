@@ -4616,6 +4616,14 @@ class ChatEngine:
             self._kaydet(mesaj, kalici, "kalici_hafiza")
             return {"cevap": kalici, "kanal": "kalici_hafiza"}
 
+        # ── 1.5 ZAMİR ÇÖZÜMLEME: "bu/şu/o nerede" → önceki konuşmanın kavramı ──
+        zamirli = self._zamir_coz(mesaj)
+        if zamirli:
+            self.baglam.ekle("user", mesaj)
+            self.baglam.ekle("asi", zamirli["cevap"])
+            self._kaydet(mesaj, zamirli["cevap"], "zamir")
+            return {"cevap": zamirli["cevap"], "kanal": "zamir"}
+
         # ── 2. CONTEXT BUILDER: bağlamı topla (son mesajlar + görevler) ──
         baglam_metni = self.baglam.ozet()
 
@@ -4642,6 +4650,42 @@ class ChatEngine:
             "adimlar": dusunce["adimlar"],
             "vektor_eslesme": self._vektor_esle(mesaj),
         }
+
+    def _zamir_coz(self, mesaj: str) -> Optional[dict]:
+        """Zamir çözümleme: 'bu/şu/o nerede kullanılır' → son konuşulan kavramı bağla.
+        Bağlamdaki son user mesajından ana kavramı çıkarır."""
+        n = norm_tr(mesaj)
+        # Zamir + soru kalıbı mı? ("bu nerede", "o nedir", "peki o", "şu nasıl")
+        zamir_kalip = any(k in n for k in ("bu nerede", "bu ne", "bu nasıl", "o nerede",
+                                           "o ne", "o nasıl", "şu ne", "şu nerede",
+                                           "bu kim", "o kim", "peki bu", "peki o",
+                                           "bunun", "onun", "bunu", "onu"))
+        if not zamir_kalip:
+            return None
+        # Bağlamdaki son kavramı bul (kullanıcı mesajındaki ana kelime)
+        kavram = None
+        for h in reversed(self.baglam.history):
+            if h["rol"] == "user":
+                # Son sorunun ana kavramı: soru kelimelerini at
+                kelimeler = [w for w in norm_tr(h["mesaj"]).split()
+                             if len(w) > 3 and w not in
+                             ("nedir", "hakkında", "ne", "biliyorsun", "söyle",
+                              "anlat", "neden", "nasıl", "nerede", "var", "bir")]
+                if kelimeler:
+                    # "x nedir" → x; "x hakkında" → x; iki parçalıysa ilk kavram
+                    kavram = kelimeler[-1] if len(kelimeler) == 1 else kelimeler[0]
+                    break
+        if not kavram:
+            return None
+        # Zamiri kavramla değiştir ve yeniden sor
+        yeni_soru = re.sub(r'\b(bu|şu|o|bunun|onun|bunu|onu)\b', kavram, mesaj, flags=re.IGNORECASE)
+        # Bağlaçları at ("Peki X nerede kullanılır" → "X nerede kullanılır")
+        yeni_soru = re.sub(r'^(peki|ve|ayrıca|o zaman|sonra|ama)\s*[,]?\s*', '', yeni_soru.strip(), flags=re.IGNORECASE)
+        r = self.kernel.ask(yeni_soru)
+        cevap = str(r.get("answer", r))
+        if cevap and "cevaplayamıyorum" not in cevap:
+            return {"cevap": cevap, "kavram": kavram}
+        return None
 
     def _plan_cevap(self, mesaj: str, dusunce: dict, baglam: str) -> str:
         """RESPONSE PLANNER: ham cevabı kanala göre şekillendir."""
