@@ -4643,6 +4643,14 @@ class ChatEngine:
             self._kaydet(mesaj, zamirli["cevap"], "zamir")
             return {"cevap": zamirli["cevap"], "kanal": "zamir"}
 
+        # ── 1.6 ÇOK PARÇALI SORU BÖLME: "X nedir, nerede ölçülür ve neye sebep olur?" ──
+        bolunmus = self._soru_bol(mesaj)
+        if bolunmus:
+            self.baglam.ekle("user", mesaj)
+            self.baglam.ekle("asi", bolunmus)
+            self._kaydet(mesaj, bolunmus, "soru_bol")
+            return {"cevap": bolunmus, "kanal": "soru_bol"}
+
         # ── 2. CONTEXT BUILDER: bağlamı topla (son mesajlar + görevler) ──
         baglam_metni = self.baglam.ozet()
 
@@ -4704,6 +4712,62 @@ class ChatEngine:
         cevap = str(r.get("answer", r))
         if cevap and "cevaplayamıyorum" not in cevap:
             return {"cevap": cevap, "kavram": kavram}
+        return None
+
+    def _soru_bol(self, mesaj: str) -> Optional[str]:
+        """ÇOK PARÇALI SORU BÖLME:
+        'X nedir, nerede ölçülür ve neye sebep olur?' → parçalara ayır, her parçayı
+        çöz, birleştir. Yalnızca gerçekten çok parçalı sorularda devreye girer."""
+        n = norm_tr(mesaj)
+        # Soru parçaları: virgül veya "ve" ile ayrılmış SORU kalıpları
+        soru_kalip = ("nedir", "neden", "nerede", "nasıl", "ne zaman", "kimdir",
+                      "ne yapar", "neden olur", "nered", "hangi", "neye sebep",
+                      "sebep olur", "neden olur", "ne ise yarar")
+        # Kaç soru kalıbı var?
+        kalip_sayisi = sum(1 for k in soru_kalip if k in n)
+        # Bölünebilir mi: 2+ soru kalıbı VE virgül/ve var
+        ayirac_var = "," in mesaj or " ve " in mesaj or " ve" in mesaj
+        if kalip_sayisi < 2 or not ayirac_var:
+            return None
+
+        # Parçala: virgül ve "ve" ile
+        parcalar = re.split(r',\s*|\s+ve\s+', mesaj)
+        parcalar = [p.strip().strip('?').strip() for p in parcalar if p.strip()]
+        if len(parcalar) < 2:
+            return None
+
+        # İlk parçadan kavramı çıkar (zamir enjeksiyonu için)
+        kavram = None
+        ilk_n = norm_tr(parcalar[0])
+        for w in ilk_n.split():
+            if len(w) > 3 and w not in ("nedir", "hakkında", "ne", "biliyorsun",
+                                        "söyle", "anlat", "neden", "nasıl"):
+                kavram = w
+                break
+
+        # Her parçayı çöz (kavram yoksa ilk parçanın kavramını enjekte et)
+        cevaplar = []
+        for parca in parcalar:
+            p_n = norm_tr(parca)
+            # Parça soru kalıbı içermiyorsa kavramı öne ekle
+            if not any(k in p_n for k in ("nedir", "neden", "nerede", "nasıl",
+                                          "ne zaman", "kimdir", "ne yapar",
+                                          "hangi", "ne", "sebep")):
+                continue
+            # Zamir/kavramsız parçaya kavramı enjekte et: "nerede yetişir" → "Zakkum nerede yetişir"
+            if kavram and p_n[0] != kavram[0]:
+                ilk_kelime = p_n.split()[0] if p_n.split() else ""
+                if ilk_kelime in ("nerede", "neden", "nasıl", "ne", "hangi", "kim", "neye", "niçin"):
+                    parca = f"{parcalar[0].split(',')[0].split(' ve')[0]} {parca}"
+            r = self.kernel.ask(parca)
+            c = str(r.get("answer", r))
+            if c and "cevaplayamıyorum" not in c and "bulunamadı" not in c:
+                cevaplar.append(f"• {parca[:40]}: {c[:100]}")
+            elif c and "cevaplayamıyorum" in c:
+                cevaplar.append(f"• {parca[:40]}: (henüz bilmiyorum)")
+
+        if len(cevaplar) >= 2:
+            return "\n".join(cevaplar)
         return None
 
     def _plan_cevap(self, mesaj: str, dusunce: dict, baglam: str) -> str:
