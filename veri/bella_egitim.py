@@ -14,10 +14,11 @@ from kernel_v2 import ASIKernel
 k = ASIKernel()
 BELLA_DIR = r'C:\Users\alipranac\Desktop\projelerim\asi-prototype\veri\bella_akademik'
 
-# ── İSA KALIBI: "X, bir Y'dir." / "X bir Y'dir" / "X, Y'lerden biridir" ──
+# ── İSA KALIBI: "X, bir Y'dir." / "X bir Y'dir" — SIKI (arada max 1-2 sıfat) ──
+# GEVŞEK kalıp gürültü üretiyordu ("nun kendini hiçe saydığı...") — daraltıldı
 ISA_KALIPLARI = [
-    re.compile(r'([\wğüşıöçĞÜŞİÖÇ\s\-]{2,40}?),\s*(?:[\wğüşıöçĞÜŞİÖÇ\s,]{0,60}?)\s*bir\s+([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?)(?:dır|dir|dur|dür|tır|tir)\b', re.IGNORECASE),
-    re.compile(r'([\wğüşıöçĞÜŞİÖÇ\s\-]{2,40}?)\s+bir\s+([\wğüşıöçĞÜŞİÖÇ\s\-]{2,45}?)(?:dır|dir|dur|dür|tır|tir)\b', re.IGNORECASE),
+    re.compile(r'([\wğüşıöçĞÜŞİÖÇ\s\-]{2,40}?),\s*(?:(?:küçük|büyük|önemli|özel|temel|genel|farklı|basit|yeni)\s+)?bir\s+([\wğüşıöçĞÜŞİÖÇ]{2,40}?)(?:dır|dir|dur|dür|tır|tir)\b', re.IGNORECASE),
+    re.compile(r'([\wğüşıöçĞÜŞİÖÇ\s\-]{2,40}?)\s+(?:(?:küçük|büyük|önemli|özel|temel|genel|farklı|basit|yeni)\s+)?bir\s+([\wğüşıöçĞÜŞİÖÇ]{2,40}?)(?:dır|dir|dur|dür|tır|tir)\b', re.IGNORECASE),
 ]
 
 def ilk_cumleler(metin, n=3):
@@ -52,8 +53,8 @@ for dosya_adi in sorted(os.listdir(BELLA_DIR)):
                 if not m:
                     continue
                 hedef = m.group(2).strip().rstrip('.,;:!?')
-                if not hedef_kaliteli(hedef, "isa", hedef):
-                    # hedef_kaliteli(subj, rel, hedef) — subj=hedef kontrolü atla
+                # subj burada kullanılmıyor — boş geç (hedef kalitesi kontrolü)
+                if not hedef_kaliteli("", "isa", hedef):
                     filtre += 1
                     break
                 sonuc = k.relations.add_relation(

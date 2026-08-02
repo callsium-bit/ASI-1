@@ -11,9 +11,10 @@ ZAYIF_HEDEF = {
     "birer", "bir", "olan", "olduğun", "olduğu", "bulunan", "yer", "alan",
     "yapının", "yapısın", "kısmın", "kısmı", "parçasın", "parçası",
     "tasarım", "tasarımın", "düzenin", "yönetimin", "yönetim",
+    "var", "yok", "vardır", "yoktur",
 }
 FIIL_SON = ("dır", "dir", "dur", "dür", "tır", "tir", "mış", "miş", "muş", "müş",
-            "yor", "mak", "mek", "ken", "arak", "erek")
+            "yor", "mak", "mek", "ken", "arak", "erek", "makta", "mekte")
 IYELIK_SON = (
     "sında", "sinde", "sunda", "sünde",
     "ların", "lerin", "ların", "lerin",
@@ -40,6 +41,9 @@ def hedef_kaliteli(subj, rel, hedef):
         return False
     for e in IYELIK_SON:
         if e in ("ın", "in", "un", "ün") and len(son_kelime) < 5:
+            continue
+        # "li/lı/lu/lü" yalnızca 5+ karakter hedeflerde (4 harfli "dili" = gerçek kelime)
+        if e in ("li", "lı", "lu", "lü") and len(son_kelime) < 5:
             continue
         if son_kelime.endswith(e):
             return False
