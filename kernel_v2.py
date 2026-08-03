@@ -1427,17 +1427,23 @@ class ASIKernel:
             expr = re.sub(r'^(bana|söyle|anlat|soruyorum)\s+', '', expr)
             if expr:
                 expr_nodes = self.hooks.get_hook_nodes(norm(expr))
+                # EN GÜVENİLİR DÜĞÜM: aynı kavramın çoklu isa düğümünde
+                # en yüksek confidence'lı seç (set sırası rastgele olmasın)
+                en_iyi = None
                 for node in expr_nodes:
                     if node.isolated:
                         continue
-                    props = node.properties
-                    if "isa" in props:
-                        return {
-                            "question": question, "entity": node.ne,
-                            "answer": f"{node.ne}, {self._tr_dır(props['isa'])}.",
-                            "source": node.source, "confidence": node.confidence,
-                            "from_memory": True
-                        }
+                    if "isa" in node.properties and \
+                       (en_iyi is None or node.confidence > en_iyi.confidence):
+                        en_iyi = node
+                if en_iyi:
+                    props = en_iyi.properties
+                    return {
+                        "question": question, "entity": en_iyi.ne,
+                        "answer": f"{en_iyi.ne}, {self._tr_dır(props['isa'])}.",
+                        "source": en_iyi.source, "confidence": en_iyi.confidence,
+                        "from_memory": True
+                    }
 
                 # 1b. KISMI EŞLEŞME: expr, düğüm adının bir parçasıysa
                 # (kelime sınırlı — "minotor" içindeki "i" veya "san" eşleşmesin)
