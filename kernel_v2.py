@@ -1153,8 +1153,19 @@ class KnowledgeStore:
         for node in hook_engine.nodes.values():
             data["nodes"].append(node.to_dict())
 
-        with open(path, 'w', encoding='utf-8') as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+        # ATOMİK YAZMA: önce .tmp'ye yaz, başarılıysa os.replace ile taşı.
+        # Kesinti/çökme durumunda ana dosya asla yarıda kalmaz (175K düğüm korunur).
+        tmp_path = path + ".tmp"
+        try:
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
 
         return {
             "saved": len(data["nodes"]),
@@ -4527,10 +4538,13 @@ class TaskMemory:
         if any(k in n for k in ("gorevlerim", "gorevler neler", "yapilacaklar", "hatirlatm")):
             return {"tur": "listele"}
         # ÖNCE kapat: "X'i unut", "X'i sil", "X görevini unut"
-        # DİKKAT: "sil" kelime bazlı — "nasılsın" içindeki "sil" alt dizesi tetiklenmesin
+        # DİKKAT: "sil"/"un"/"ut" kelime bazlı — "mutluyum ve sunum" gibi cümlelerde
+        # substring eşleşmesi sahte görev silme üretmesin
         kelimeler = set(n.split())
         sil_kelime = "sil" in kelimeler or "silebilir" in n or "sileyim" in n
-        if (sil_kelime or ("un" in n and "ut" in n and "nasilsin" not in n)):
+        unut_kelime = any(w in ("unut", "unuttum", "unutm", "unutsun") for w in kelimeler) or \
+                      any(w.endswith("unut") or w.startswith("unut") for w in kelimeler)
+        if sil_kelime or unut_kelime:
             # İlk anlamlı kelimeyi ara: "ekmek görevini unut" → "ekmek"
             metin = self._ilk_kelime(mesaj)
             if metin:
@@ -4907,15 +4921,6 @@ class ChatEngine:
         if eslesmeler:
             return [{"kavram": k, "benzerlik": round(s, 3)} for s, k in eslesmeler]
         return None
-
-    def durum(self) -> dict:
-        return {
-            "baglam_turn": len(self.baglam.history) // 2,
-            "gorev_acik": len(self.gorevler.liste()),
-            "gorev_toplam": len(self.gorevler.gorevler),
-            "vektor_ornek_sayi": len(self.vektor._vector_cache),
-        }
-
 
 # ═══════════════════════════════════════════════════════════════════
 # AŞAMA 11: DÜŞÜNME KATMANI — NARS esinli kognitif döngü + akıcı konuşma
