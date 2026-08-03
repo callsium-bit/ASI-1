@@ -136,4 +136,6 @@ asi-prototype/
 
 ## 📜 Lisans
 
-MIT
+**Apache License 2.0** — ticari kullanım, değiştirme ve dağıtım serbesttir (atıf şartıyla). Detaylar için [LICENSE](LICENSE) dosyasına bakın.
+
+© 2026 Ali Pranac
