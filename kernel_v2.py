@@ -444,6 +444,9 @@ class HookEngine:
         self.hooks: Dict[str, Set[str]] = {}
         self._node_counter = 0
         self.dedup_stats = {"duplicates_found": 0, "new_nodes": 0}
+        # NE-INDEX: sadece norm(ne) → node_id'ler (property değerlerini içermez).
+        # search_5n1k/find_duplicate O(1) gerçek kavram araması için.
+        self._ne_index: Dict[str, Set[str]] = {}
 
     def _next_id(self) -> str:
         self._node_counter += 1
@@ -451,14 +454,12 @@ class HookEngine:
 
     def find_duplicate(self, ne: str, properties: dict) -> Optional[CrystalNode]:
         """Aynı (ne + properties) eşleşmesine sahip mevcut düğümü bul.
-        HIZLANDIRMA: hooks index'inden adayları O(1) bul, tüm grafiği tarama."""
+        HIZLANDIRMA: ne-index'ten O(1) aday bul (hook'lar property değerlerini de içerir)."""
         norm = AxiomEngine._normalize_tr
-        ne_norm = norm(ne)
-        adaylar = self.get_hook_nodes(ne)
-        if not adaylar:
-            return None
-        for node in adaylar:
-            if node.isolated:
+        ids = self._ne_index.get(norm(ne), set())
+        for nid in ids:
+            node = self.nodes.get(nid)
+            if not node or node.isolated:
                 continue
             # Property eşleşmesi: tüm key-value çiftleri aynı mı?
             if not properties and not node.properties:
@@ -522,6 +523,7 @@ class HookEngine:
     def _hook_node(self, node: CrystalNode):
         norm = AxiomEngine._normalize_tr
         self._add_hook(norm(node.ne), node.id)
+        self._ne_index.setdefault(norm(node.ne), set()).add(node.id)
         for prop_name, prop_value in node.properties.items():
             self._add_hook(f"{norm(node.ne)}.{norm(prop_name)}", node.id)
             if isinstance(prop_value, str):
@@ -552,14 +554,12 @@ class HookEngine:
 
     def search_5n1k(self, ne: str = None, nerede: str = None,
                     ne_zaman: str = None) -> List[CrystalNode]:
-        # HIZLANDIRMA: ne verilmişse hooks index'inden O(1) bul (gate O(n²) → O(1))
+        # HIZLANDIRMA: ne verilmişse NE-INDEX'ten O(1) bul (sadece gerçek ne eşleşmesi)
         if ne and not nerede and not ne_zaman:
             norm = AxiomEngine._normalize_tr
-            ne_norm = norm(ne)
-            # Hook'lar property DEĞERLERİNİ de index'ler — ne eşleşmesini filtrele
-            sonuc = [n for n in self.get_hook_nodes(ne)
-                     if not n.isolated and norm(n.ne) == ne_norm]
-            return sonuc
+            ids = self._ne_index.get(norm(ne), set())
+            return [self.nodes[nid] for nid in ids
+                    if nid in self.nodes and not self.nodes[nid].isolated]
         results = []
         norm = AxiomEngine._normalize_tr
         ne_norm = norm(ne) if ne else None
