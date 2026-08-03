@@ -219,14 +219,23 @@ class AxiomEngine:
         self._property_index: Dict[str, Set[str]] = {}
         self._load_defaults()
 
+    _normalize_cache: Dict[str, str] = {}
+
     @staticmethod
     def _normalize_tr(text: str) -> str:
+        # HIZLANDIRMA: sonuç cache (aynı kelimeler tekrar normalize edilmesin — O(1))
+        cached = AxiomEngine._normalize_cache.get(text)
+        if cached is not None:
+            return cached
         # Önce Unicode NFKD: "İ" → "i" + combining dot gibi birleşik karakterleri ayrıştır
         text = unicodedata.normalize('NFKD', text)
         # Combining işaretleri at (i+dot → i)
         text = ''.join(c for c in text if not unicodedata.combining(c))
         tr_map = str.maketrans("ğĞşŞıİüÜöÖçÇ", "gGsSiIuUoOcC")
-        return text.translate(tr_map).lower()
+        sonuc = text.translate(tr_map).lower()
+        if len(AxiomEngine._normalize_cache) < 200000:
+            AxiomEngine._normalize_cache[text] = sonuc
+        return sonuc
 
     def _load_defaults(self):
         for ax in self.DEFAULT_AXIOMS:
@@ -441,13 +450,15 @@ class HookEngine:
         return f"cn_{self._node_counter:04d}"
 
     def find_duplicate(self, ne: str, properties: dict) -> Optional[CrystalNode]:
-        """Aynı (ne + properties) eşleşmesine sahip mevcut düğümü bul."""
+        """Aynı (ne + properties) eşleşmesine sahip mevcut düğümü bul.
+        HIZLANDIRMA: hooks index'inden adayları O(1) bul, tüm grafiği tarama."""
         norm = AxiomEngine._normalize_tr
         ne_norm = norm(ne)
-        for node in self.nodes.values():
+        adaylar = self.get_hook_nodes(ne)
+        if not adaylar:
+            return None
+        for node in adaylar:
             if node.isolated:
-                continue
-            if norm(node.ne) != ne_norm:
                 continue
             # Property eşleşmesi: tüm key-value çiftleri aynı mı?
             if not properties and not node.properties:
@@ -457,7 +468,6 @@ class HookEngine:
                 for k, v in properties.items():
                     node_val = node.properties.get(k)
                     if node_val is None:
-                        # Farklı property key → farklı düğüm
                         match = False
                         break
                     if norm(str(node_val)) != norm(str(v)):
@@ -523,7 +533,9 @@ class HookEngine:
         for field in [node.nasil, node.neden, node.kim]:
             if field:
                 self._add_hook(norm(field), node.id)
-        node.hooks = {h for h, ids in self.hooks.items() if node.id in ids}
+        # HIZLANDIRMA: node.hooks'u TÜM hooks'ları tarayarak hesaplama (O(N) — kaldırıldı).
+        # Lazily get_hook_nodes ile erişilir; sadece kendi ne hook'unu işaretle.
+        node.hooks = {norm(node.ne)}
 
     def _add_hook(self, hook_name: str, node_id: str):
         hook_name = hook_name.strip()
@@ -540,6 +552,14 @@ class HookEngine:
 
     def search_5n1k(self, ne: str = None, nerede: str = None,
                     ne_zaman: str = None) -> List[CrystalNode]:
+        # HIZLANDIRMA: ne verilmişse hooks index'inden O(1) bul (gate O(n²) → O(1))
+        if ne and not nerede and not ne_zaman:
+            norm = AxiomEngine._normalize_tr
+            ne_norm = norm(ne)
+            # Hook'lar property DEĞERLERİNİ de index'ler — ne eşleşmesini filtrele
+            sonuc = [n for n in self.get_hook_nodes(ne)
+                     if not n.isolated and norm(n.ne) == ne_norm]
+            return sonuc
         results = []
         norm = AxiomEngine._normalize_tr
         ne_norm = norm(ne) if ne else None
