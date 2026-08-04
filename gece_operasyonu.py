@@ -15,12 +15,17 @@ import sys, os, json, time, traceback
 from datetime import datetime
 
 # KERNEL PROJE DİZİNİ: kernel_v2.py ve knowledge_store.json burada.
-# Script ~/.hermes/scripts'ten çalışsa bile projeyi bulur (cron bağlamı).
-PROJE_DIR = os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__)))  # ~/.hermes/scripts → ~/.hermes (YANLIŞ ise aşağı sabitlenir)
-# Gerçek proje yolu (cron kopyası için sabit):
-if not os.path.exists(os.path.join(PROJE_DIR, "kernel_v2.py")):
-    PROJE_DIR = r"C:\Users\alipranac\Desktop\projelerim\asi-prototype"
+# Öncelik: ASI_PROJE_DIR ortam değişkeni → script üst dizinleri → mevcut dizin.
+PROJE_DIR = os.environ.get("ASI_PROJE_DIR", "")
+if not PROJE_DIR or not os.path.exists(os.path.join(PROJE_DIR, "kernel_v2.py")):
+    # ~/.hermes/scripts/asi-gece.py → ~/.hermes → ~ (üst dizinleri dene)
+    for ust in (os.path.dirname(SCRIPT_DIR), os.path.dirname(os.path.dirname(SCRIPT_DIR))):
+        if os.path.exists(os.path.join(ust, "kernel_v2.py")):
+            PROJE_DIR = ust
+            break
+if not PROJE_DIR or not os.path.exists(os.path.join(PROJE_DIR, "kernel_v2.py")):
+    # Son çare: çalışma dizini (projede çalıştırılıyorsa)
+    PROJE_DIR = os.getcwd()
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(PROJE_DIR)
 sys.path.insert(0, PROJE_DIR)

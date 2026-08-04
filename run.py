@@ -19,8 +19,9 @@ import subprocess
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
-# Python yolu - önce sistem Python'unu (PySide6 için), yoksa mevcut Python'u dene
-SYSTEM_PYTHON = r"C:\Users\alipranac\AppData\Local\Programs\Python\Python312\python.exe"
+# Python yolu: önce çalıştıran Python (taşınabilir), ortam değişkeniyle ezilebilir
+# ASI_PYTHON ortam değişkeni varsa onu kullan (PySide6 kurulu sistem Python'u gibi)
+SYSTEM_PYTHON = os.environ.get("ASI_PYTHON", sys.executable)
 PYTHON = SYSTEM_PYTHON if os.path.exists(SYSTEM_PYTHON) else sys.executable
 
 KERNEL = os.path.join(SCRIPT_DIR, "kernel_v2.py")

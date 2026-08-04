@@ -17,3 +17,25 @@ knowledge_store_v0.1.json
 gece_raporu.json
 .gece_tur.json
 knowledge_store.json.bak
+# Geçici test/debug script'leri (kişisel yollar içerir, repo'ya ait değil)
+*_test.py
+debug_*.py
+bilinmeyen_test.py
+kognitif_test.py
+ogrenme_*.py
+buyuk_test.py
+final_test.py
+ks_kontrol.py
+pipeline_test.py
+stres_test.py
+uzun_*.py
+yeni_kavram_test.py
+soru_bol_test.py
+# Egitim/tek-kullanimlik araçlar (kisisel yollar icerir — lokal kalir)
+veri/*.py
+degerlendirme.py
+kalite_testi.py
+sinav.py
+temizlik.py
+turetim.py
+chat_test2.py
