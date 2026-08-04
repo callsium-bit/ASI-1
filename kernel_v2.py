@@ -452,6 +452,27 @@ class HookEngine:
         self._node_counter += 1
         return f"cn_{self._node_counter:04d}"
 
+    def find_izole_duplicate(self, ne: str, properties: dict) -> Optional[CrystalNode]:
+        """İZOLE düğümler arasında (ne + properties) eşleşmesi ara.
+        gate'in çelişki dalı için: aynı çelişki tekrar tekrar izole havuza
+        yığılmasın — mevcut izole düğümün verification_count'u artırılır."""
+        norm = AxiomEngine._normalize_tr
+        ids = self._ne_index.get(norm(ne), set())
+        for nid in ids:
+            node = self.nodes.get(nid)
+            if not node or not node.isolated:
+                continue
+            if not properties and not node.properties:
+                return node
+            if properties and node.properties:
+                match = all(
+                    norm(str(node.properties.get(k, ""))) == norm(str(v))
+                    for k, v in properties.items()
+                ) and len(properties) == len(node.properties)
+                if match:
+                    return node
+        return None
+
     def find_duplicate(self, ne: str, properties: dict) -> Optional[CrystalNode]:
         """Aynı (ne + properties) eşleşmesine sahip mevcut düğümü bul.
         HIZLANDIRMA: ne-index'ten O(1) aday bul (hook'lar property değerlerini de içerir)."""
@@ -507,13 +528,15 @@ class HookEngine:
         if existing:
             return self._update_duplicate(existing, source, confidence)
         # Yeni düğüm oluştur
+        _simdi = datetime.now().isoformat()
         node = CrystalNode(
             id=self._next_id(), ne=ne, nerede=nerede, ne_zaman=ne_zaman,
             nasil=nasil, neden=neden, kim=kim,
             properties=props, source=source, confidence=confidence,
             evidence=[source] if source else [],
             sources=[source] if source else [],
-            last_verified=datetime.now().isoformat()
+            created_at=_simdi,
+            last_verified=_simdi
         )
         self.nodes[node.id] = node
         self._hook_node(node)
@@ -877,6 +900,17 @@ class ContradictionEngine:
 
         if has_conflict:
             # Çelişkili → izole alan
+            # DEDUP: aynı (ne, properties) zaten izole havuzundaysa yenisini yaratma —
+            # mevcut izole düğümün verification_count'unu artır (yığılma önleme)
+            mevcut_izole = self.hooks.find_izole_duplicate(ne, properties)
+            if mevcut_izole:
+                mevcut_izole.verification_count += 1
+                mevcut_izole.last_verified = datetime.now().isoformat()
+                result["node_id"] = mevcut_izole.id
+                result["reason"] = "; ".join(conflict_reasons)
+                result["contradiction_count"] = len(conflict_reasons)
+                result["is_duplicate"] = True
+                return result
             node = CrystalNode(
                 id=self.hooks._next_id(), ne=ne,
                 properties=properties, source=source,
@@ -885,6 +919,7 @@ class ContradictionEngine:
                 evidence=[source] if source else []
             )
             self.hooks.nodes[node.id] = node
+            self.hooks._hook_node(node)  # ne-index'e de girsin (izole dedup için)
             self.isolation_zone.append(node)
             result["node_id"] = node.id
             result["reason"] = "; ".join(conflict_reasons)

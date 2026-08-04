@@ -78,6 +78,12 @@ class DatasetIngester:
             if first_comma > 0:
                 subject = text[:first_comma].strip()
 
+        # KALİTE: min uzunluk + HTML/markup temizliği (tek karakter/etiket kaçmasın)
+        if subject:
+            subject = re.sub(r'<[^>]+>', '', subject).strip()
+            if len(subject) < 2:
+                subject = ""
+
         if subject:
             # İlk cümleyi al (nokta ile biten kısım)
             ilk_cumle = re.split(r'[.!?]\s', text)[0] if text else ""
@@ -98,6 +104,8 @@ class DatasetIngester:
                 )
                 if m:
                     target = m.group(1).strip()
+                    # HTML/markup savunması: kaynak ne olursa olsun etiket temizlenir
+                    target = re.sub(r'<[^>]+>', '', target).strip()
                     # Kalite: 2-50 karakter, subject değil
                     if 2 <= len(target) <= 50 and target.lower() != subject.lower():
                         # Genel kelimeleri at
@@ -152,7 +160,9 @@ class DatasetIngester:
                 if not subject:
                     subject = m.group("subject").strip()
                 target = m.group("target").strip().rstrip('.,;:!?')
-                if 2 <= len(target) <= 50 and target.lower() != subject.lower():
+                # HTML/markup savunması + min uzunluk
+                target = re.sub(r'<[^>]+>', '', target).strip()
+                if len(subject) >= 2 and 2 <= len(target) <= 50 and target.lower() != subject.lower():
                     relations.append(("isa", subject, target))
 
         # ── hasa: "X'in Y'si Z'dir" ──
