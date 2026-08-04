@@ -1155,10 +1155,21 @@ class KnowledgeStore:
 
         # ATOMİK YAZMA: önce .tmp'ye yaz, başarılıysa os.replace ile taşı.
         # Kesinti/çökme durumunda ana dosya asla yarıda kalmaz (175K düğüm korunur).
+        # SNAPSHOT: mevcut dosyayı .bak olarak koru — yanlış temizlik/gürültü
+        # durumunda geri dönüş imkanı (geri alınamaz veri kaybına karşı).
         tmp_path = path + ".tmp"
+        bak_path = path + ".bak"
         try:
             with open(tmp_path, 'w', encoding='utf-8') as f:
                 json.dump(data, f, ensure_ascii=False, indent=2)
+            # Mevcut ana dosyayı .bak'a taşı (yoksa sorun değil)
+            if os.path.exists(path):
+                try:
+                    if os.path.exists(bak_path):
+                        os.remove(bak_path)
+                    os.replace(path, bak_path)
+                except OSError:
+                    pass  # bak başarısız olursa ana dosyayı doğrudan değiştir
             os.replace(tmp_path, path)
         finally:
             if os.path.exists(tmp_path):
@@ -3469,9 +3480,15 @@ class RelationEngine:
     # ── İlişki yazma (gate'ten geçer) ──────────────────────────
     def add_relation(self, subject: str, rel_type: str, target: str,
                      source: str = "relation_engine", confidence: float = 0.8) -> dict:
-        """İlişkiyi gate'ten geçirip kristal düğüme yazar."""
+        """İlişkiyi gate'ten geçirip kristal düğüme yazar.
+        FEYNMAN KURALI: her eklemede zıt özellik kontrolü (isa hedefleri için)."""
         if rel_type not in RELATION_TYPES:
             return {"accepted": False, "reason": f"Bilinmeyen ilişki türü: {rel_type}"}
+        # Feynman: "kar isa sıvı" — subject'in hal'i hedefle çelişiyorsa reddet
+        if rel_type in ("isa", "instance_of", "subclass_of"):
+            if self._zit_ozellik_var(subject, target):
+                return {"accepted": False,
+                        "reason": f"Feynman kuralı: '{subject}' özelliği '{target}' ile çelişiyor"}
         gate = self.kernel.contradictions.gate(
             ne=subject, properties={rel_type: target},
             source=source, confidence=confidence
@@ -3665,21 +3682,23 @@ class RelationEngine:
 
     # ── Zıt özellik kontrolü ────────────────────────────────────
     def _zit_ozellik_var(self, subject: str, target: str) -> bool:
-        """Subject'in 'hal' özelliği ile hedef çelişiyorsa True.
-        kar hasa hal=kati, hedef 'sıvı' ise → çelişki."""
+        """Subject'in hal özelliği ile hedef çelişiyorsa True.
+        kar hasa hal=kati / has_property=kati, hedef 'sıvı' ise → çelişki.
+        has_property değerleri de taranır (hal/durum/faz + kati/sivi/gaz)."""
         n = norm_tr
-        # Subject'in hal özelliğini bul
         subject_hal = None
         for node in self.kernel.hooks.nodes.values():
             if node.isolated or n(node.ne) != n(subject):
                 continue
             for k, v in node.properties.items():
-                if k in ("hal", "durum", "faz"):
-                    subject_hal = n(str(v))
+                if k in ("hal", "durum", "faz", "has_property"):
+                    val_n = n(str(v))
+                    if k in ("hal", "durum", "faz") or val_n in ("kati", "sivi", "gaz", "plazma", "sıvı", "katı"):
+                        subject_hal = val_n
         if not subject_hal:
             return False
         # Hedef bir hal/madde-durumu mu?
-        hal_kelimeleri = {"sivi", "kati", "gaz", "plazma", "sıvı", "katı", "gaz"}
+        hal_kelimeleri = {"sivi", "kati", "gaz", "plazma", "sıvı", "katı"}
         target_n = n(target)
         hedef_hal = None
         for w in target_n.split():
