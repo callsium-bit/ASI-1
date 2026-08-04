@@ -5053,8 +5053,11 @@ class ReasoningEngine:
         # 3. PLAN: kavramları çıkar, kaynakları sırala
         stop = {"nedir", "kimdir", "neden", "niçin", "nerede", "nereye", "nasıl",
                 "ne", "bir", "mi", "mı", "mu", "mü", "kaç", "hangi", "ne zaman",
-                "niye", "neymiş", "olur", "edebilir", "görebilir", "mıdır", "midir"}
-        kavramlar = [w for w in q.split() if len(w) > 2 and w not in stop][:3]
+                "niye", "neymiş", "olur", "edebilir", "görebilir", "mıdır", "midir",
+                "peki", "demek", "bu", "su", "o", "sunu", "bunu", "onun", "bunun",
+                "sonra", "ayrıca", "yani", "acaba", "sence", "bence"}
+        kavramlar = [w.strip('?.,!;:') for w in q.split()
+                     if len(w.strip('?.,!;:')) > 2 and w.strip('?.,!;:') not in stop][:3]
         # BAĞLAM DESTEĞİ: soruda kavram yoksa son konuşmalardan kavram devral
         # ("peki bu nerede kullanılır?" → önceki mesajın kavramı)
         if not kavramlar and baglam:
@@ -5067,6 +5070,8 @@ class ReasoningEngine:
                         kavramlar = kelimeler[:3]
                         adimlar.append({"tur": "olgu",
                                         "icerik": f"Bağlamdan kavram: {kelimeler[0]}"})
+                        # SORUYU KAVRAMLA YENİDEN KUR: "Peki bu ne demek?" → "pragmatizm nedir?"
+                        soru = f"{kelimeler[0]} nedir?"
                         break
         plan = []
         if kavramlar:
