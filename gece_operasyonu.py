@@ -15,6 +15,7 @@ import sys, os, json, time, traceback
 from datetime import datetime
 
 # KERNEL PROJE DİZİNİ: kernel_v2.py ve knowledge_store.json burada.
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 # Öncelik: ASI_PROJE_DIR ortam değişkeni → script üst dizinleri → mevcut dizin.
 PROJE_DIR = os.environ.get("ASI_PROJE_DIR", "")
 if not PROJE_DIR or not os.path.exists(os.path.join(PROJE_DIR, "kernel_v2.py")):
@@ -24,9 +25,8 @@ if not PROJE_DIR or not os.path.exists(os.path.join(PROJE_DIR, "kernel_v2.py")):
             PROJE_DIR = ust
             break
 if not PROJE_DIR or not os.path.exists(os.path.join(PROJE_DIR, "kernel_v2.py")):
-    # Son çare: çalışma dizini (projede çalıştırılıyorsa)
+    # Son çare: çalışma dizini (cron workdir=proje; projede çalıştırılıyorsa)
     PROJE_DIR = os.getcwd()
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 os.chdir(PROJE_DIR)
 sys.path.insert(0, PROJE_DIR)
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
