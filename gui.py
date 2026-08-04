@@ -117,41 +117,49 @@ class KernelWorker(QThread):
         self._handle_status()
 
     def _handle_distill(self, concept: str, endpoint: str, model: str):
-        """LLM damıtma KALDIRILDI — sistem saf sembolik."""
-        return {"accepted": 0, "note": "LLM kaldırıldı"}
-            self.log_signal.emit(f"   +{result['accepted']} kabul, -{result['rejected']} ret", 
-                               "success" if result['accepted'] > 0 else "warn")
-            for err in result.get('errors', [])[:3]:
-                self.log_signal.emit(f"   ⚠️ {err}", "warn")
+        """LLM damıtma KALDIRILDI — sistem saf sembolik.
+        Sembolik karşılık: kavramı türetim motorundan geçir."""
+        if not self.kernel:
+            return
+        self.log_signal.emit(f"🧠 Türetim: {concept}", "info")
+        try:
+            result = self.kernel.relations.apply_hypotheses(concept, max_depth=2)
+            self.log_signal.emit(
+                f"   {result['hypotheses']} hipotez, {result['accepted']} kabul, {result['rejected']} ret",
+                "success" if result["accepted"] > 0 else "warn")
         except Exception as e:
-            self.log_signal.emit(f"   ❌ Damıtma hatası: {e}", "error")
-
-        self.progress_signal.emit(1, 1)
+            self.log_signal.emit(f"   ❌ Türetim hatası: {e}", "error")
         self._handle_status()
 
     def _handle_auto_explore(self, max_concepts: int, endpoint: str, model: str):
-        """LLM damıtma KALDIRILDI — sistem saf sembolik."""
-        return {"accepted": 0, "note": "LLM kaldırıldı"}
-            )
-            self.log_signal.emit(
-                f"   ✅ Keşif tamam: {summary['total_accepted']} kabul, "
-                f"{summary['total_rejected']} ret, {summary['total_isolated']} izole",
-                "success"
-            )
+        """LLM damıtma KALDIRILDI — sistem saf sembolik.
+        Sembolik karşılık: bilgi boşluğu analizi (az ilişkili kavramlar)."""
+        if not self.kernel:
+            return
+        self.log_signal.emit(f"🔍 Boşluk analizi ({max_concepts} kavram)", "info")
+        try:
+            gaps = self.kernel.tools.call("boşlukları listele")
+            if isinstance(gaps, dict):
+                g = gaps.get("gaps", [])
+                self.log_signal.emit(f"   {len(g)} bilgi boşluğu tespit edildi", "success")
+            else:
+                self.log_signal.emit(f"   {gaps}", "info")
         except Exception as e:
-            self.log_signal.emit(f"   ❌ Keşif hatası: {e}", "error")
-
+            self.log_signal.emit(f"   ❌ Analiz hatası: {e}", "error")
         self._handle_status()
 
     def _handle_gaps(self):
         if not self.kernel:
             return
-        distiller = None
-        gaps = distiller.detect_gaps(limit=30)
+        gaps = self.kernel.tools.call("boşlukları listele")
+        if isinstance(gaps, dict):
+            liste = gaps.get("gaps", [])
+        else:
+            liste = []
         self.status_signal.emit({
             "type": "gaps_update",
-            "gaps": gaps,
-            "total": len(gaps)
+            "gaps": liste,
+            "total": len(liste)
         })
 
     def _handle_status(self):

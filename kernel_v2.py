@@ -1796,24 +1796,32 @@ class ASIKernel:
                         model: str = "local-model",
                         dry_run: bool = False) -> dict:
         """
-        Tek bir kavramı LLM ile damıtıp aksiyom kontrolünden geçir.
+        LLM damıtma KALDIRILDI — sembolik karşılık: kavramı türetimden geçir.
 
         Kullanım: kernel.distill_concept("yıldırım")
         """
-        distiller = self.get_distiller(endpoint=endpoint, model=model)
-        return distiller.distill(concept, context=context, dry_run=dry_run)
+        hipotezler = self.relations.apply_hypotheses(concept, max_depth=2)
+        return {
+            "concept": concept,
+            "note": "LLM kaldırıldı — sembolik türetim yapıldı",
+            **hipotezler,
+        }
 
     def auto_explore(self, max_concepts: int = 10,
                      endpoint: str = "http://localhost:PORT/v1/chat/completions",
                      model: str = "local-model",
                      dry_run: bool = False) -> dict:
         """
-        Otomatik keşif döngüsünü başlat.
+        LLM damıtma KALDIRILDI — sembolik karşılık: boşluk analizi + keşif.
 
         Kullanım: kernel.auto_explore(max_concepts=5)
         """
-        distiller = self.get_distiller(endpoint=endpoint, model=model)
-        return distiller.auto_explore(max_concepts=max_concepts, dry_run=dry_run)
+        gaps = self._sembolik_boşluklar(limit=max_concepts)
+        return {
+            "note": "LLM kaldırıldı — sembolik boşluk analizi yapıldı",
+            "gaps": gaps,
+            "gap_count": len(gaps),
+        }
 
     def _sembolik_boşluklar(self, limit: int = 20) -> list:
         """LLM'siz boşluk analizi: tek ilişkili / isa'sız kavramları bul."""
@@ -2665,8 +2673,8 @@ class WebKnowledgeIngester:
             if max_iterations > 0 and iteration >= max_iterations:
                 summary["stopped_by"] = "max_iterations"
                 break
-            distiller = LocalLLMDistiller(self.kernel)
-            gaps = distiller.detect_gaps(limit=20)
+            # SEMBOLİK boşluk analizi (LLM kaldırıldı — LocalLLMDistiller yok)
+            gaps = self._sembolik_boşluklar(limit=20)
             if not gaps:
                 print("\n   ✅ Tüm boşluklar dolduruldu!")
                 break
@@ -3684,12 +3692,11 @@ class RelationEngine:
     def _zit_ozellik_var(self, subject: str, target: str) -> bool:
         """Subject'in hal özelliği ile hedef çelişiyorsa True.
         kar hasa hal=kati / has_property=kati, hedef 'sıvı' ise → çelişki.
-        has_property değerleri de taranır (hal/durum/faz + kati/sivi/gaz)."""
+        has_property değerleri de taranır (hal/durum/faz + kati/sivi/gaz).
+        HIZLANDIRMA: ne-index'ten O(1) aday (tüm düğümleri tarama)."""
         n = norm_tr
         subject_hal = None
-        for node in self.kernel.hooks.nodes.values():
-            if node.isolated or n(node.ne) != n(subject):
-                continue
+        for node in self.kernel.hooks.search_5n1k(ne=subject):
             for k, v in node.properties.items():
                 if k in ("hal", "durum", "faz", "has_property"):
                     val_n = n(str(v))
@@ -5095,8 +5102,7 @@ if __name__ == "__main__":
         print(f"   Kalan boşluk: {summary['remaining_gaps']}")
     elif len(sys.argv) > 1 and sys.argv[1] == "--gaps":
         kernel = ASIKernel()
-        distiller = LocalLLMDistiller(kernel)
-        gaps = distiller.detect_gaps(limit=20)
+        gaps = kernel._sembolik_boşluklar(limit=20)
         print(f"🔍 {len(gaps)} boşluk tespit edildi:\n")
         for g in gaps:
             print(f"   [{g['type']:15}] {g['concept']:20} öncelik={g['priority']}")
