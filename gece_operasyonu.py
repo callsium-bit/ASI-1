@@ -14,9 +14,16 @@ Her 30 dk'da bir cron ile tetiklenir. Her turda yeni bilgi işler.
 import sys, os, json, time, traceback
 from datetime import datetime
 
+# KERNEL PROJE DİZİNİ: kernel_v2.py ve knowledge_store.json burada.
+# Script ~/.hermes/scripts'ten çalışsa bile projeyi bulur (cron bağlamı).
+PROJE_DIR = os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__)))  # ~/.hermes/scripts → ~/.hermes (YANLIŞ ise aşağı sabitlenir)
+# Gerçek proje yolu (cron kopyası için sabit):
+if not os.path.exists(os.path.join(PROJE_DIR, "kernel_v2.py")):
+    PROJE_DIR = r"C:\Users\alipranac\Desktop\projelerim\asi-prototype"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-os.chdir(SCRIPT_DIR)
-sys.path.insert(0, SCRIPT_DIR)
+os.chdir(PROJE_DIR)
+sys.path.insert(0, PROJE_DIR)
 sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 
 RAPOR = os.path.join(SCRIPT_DIR, "gece_raporu.json")
