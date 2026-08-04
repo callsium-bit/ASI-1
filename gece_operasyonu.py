@@ -101,6 +101,22 @@ def main():
         log(f"⚠️ Veri hatası: {e}")
         rapor["veri_hata"] = str(e)
 
+    # ── 1b. WEB ÖĞRENME (Wikipedia araştır-öğren — her 2. turda) ──
+    # Yerel kaynaklar doyunca web'den yeni kavram öğrenmeye devam
+    if tur % 2 == 0:
+        log("🌐 Web öğrenme başlıyor (2 kavram)...")
+        try:
+            web = k.continuous_web_ingestion(max_iterations=1, delay=1.5)
+            rapor["web"] = {
+                "kavram": len(web["concepts_processed"]),
+                "kabul": web["total_accepted"],
+                "durma": web["stopped_by"],
+            }
+            log(f"   +{web['total_accepted']} kabul ({len(web['concepts_processed'])} kavram)")
+        except Exception as e:
+            log(f"⚠️ Web hatası: {e}")
+            rapor["web_hata"] = str(e)
+
     # ── 2. TÜRETİM (kendi kendini eğitme) ──
     log("🧠 Türetim başlıyor...")
     try:

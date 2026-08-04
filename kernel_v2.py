@@ -2004,7 +2004,15 @@ class ASIKernel:
             if processed == 0:
                 summary["stopped_by"] = "no_progress"
                 break
-                
+
+            # PERİYODİK SAVE: her iterasyonda diske yaz — süreç ölse bile
+            # öğrenilen bilgi kaybolmasın (24 saatlik eğitim RAM'de kalamaz)
+            try:
+                self.save_knowledge()
+                print(f"   💾 Kaydedildi ({len(self.hooks.nodes)} düğüm)")
+            except Exception as e:
+                print(f"   ⚠️ Save hatası: {e}")
+
         return summary
 
 
