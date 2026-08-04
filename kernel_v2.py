@@ -4511,7 +4511,7 @@ class ConversationMemory:
     """Sohbet bağlamı: son N mesajı tutar, geçmişe dönük soruları cevaplar.
     B: UZUN SÜRELİ HAFIZA — sohbetler knowledge_store'a düğüm olarak yazılır."""
 
-    def __init__(self, max_turns: int = 10):
+    def __init__(self, max_turns: int = 30):
         self.history: List[dict] = []
         self.max_turns = max_turns
         self.vektor = VectorSpace()
@@ -4528,15 +4528,16 @@ class ConversationMemory:
         if not self.history:
             return "Henüz konuşma yok."
         satirlar = []
-        for h in self.history[-6:]:
+        # Pencere max_turns'e bağlı: en fazla 10 satır özet (max_turns küçükse onunla sınırlı)
+        for h in self.history[-min(10, self.max_turns):]:
             isim = "Sen" if h["rol"] == "user" else "ASI-1"
             satirlar.append(f"{isim}: {h['mesaj'][:120]}")
         return "\n".join(satirlar)
 
     def gecmis_sorgusu(self, soru: str) -> Optional[dict]:
         n = norm_tr(soru)
-        if not any(k in n for k in ("ne demi", "ne konus", "az once", "ne soyled",
-                                    "ne yaptik")):
+        # "ne konuşmuştuk/geçen" KALICI hafıza işidir — burada sadece anlık bağlam
+        if not any(k in n for k in ("ne demi", "az once", "ne soyled", "ne yaptik")):
             return None
         if not self.history:
             return {"cevap": "Henüz konuşma geçmişi yok — daha önce hiç konuşmadık."}
@@ -4556,8 +4557,8 @@ class ConversationMemory:
         Böylece restart'ta bile 'geçen hafta ne konuştuk' hatırlanır."""
         if len(self.history) < 2:
             return
-        # Son 4 turun özetini çıkar
-        son_turler = self.history[-8:]
+        # Son 4 turun özeti: pencere max_turns'e bağlı (sabit 8 yerine)
+        son_turler = self.history[-min(8, self.max_turns):]
         ozet_parcalar = []
         for h in son_turler:
             isim = "kullanici" if h["rol"] == "user" else "asi1"
@@ -4575,7 +4576,8 @@ class ConversationMemory:
     def hafizadan_hatirla(self, kernel, soru: str) -> Optional[str]:
         """Kalıcı hafızadan sohbet özetlerini ara: 'geçen hafta ne konuştuk'."""
         n = norm_tr(soru)
-        if not any(k in n for k in ("gecen", "dun", "hafta", "oncesinde", "hatirliyor")):
+        if not any(k in n for k in ("gecen", "dun", "hafta", "oncesinde", "hatirliyor",
+                                    "konusmustuk", "konustuk", "ne konus", "neydi")):
             return None
         ozetler = []
         for node in kernel.hooks.nodes.values():
@@ -4585,8 +4587,28 @@ class ConversationMemory:
                     ozetler.append(icerik)
         if not ozetler:
             return None
-        en_son = ozetler[-1]
-        return (f"Evet hatırlıyorum — son konuşmamızdan: {en_son[:150]}")
+        # KAVRAM FİLTRESİ: sorudaki anlamlı kelimeleri içeren özetleri önceliklendir
+        # ("geçen konuştuğumuz Zakkum neydi" → "zakkum" içeren özet)
+        soru_kelimeler = [w.strip('?') for w in n.split()
+                          if len(w.strip('?')) > 3 and w.strip('?') not in
+                          ("gecen", "konustugumuz", "konusmustuk", "konustuk",
+                           "hatirliyor", "hatirliyorum", "hafta", "oncesinde",
+                           "neydi", "nelerdi", "hakkinda", "son", "dun", "peki")]
+        if soru_kelimeler:
+            filtrel = [o for o in ozetler
+                       if any(w in norm_tr(o) for w in soru_kelimeler)]
+            if filtrel:
+                # Filtre kavramı garantiledi — en son eşleşen özeti seç
+                # (vektör skoru düşük kalıp yanlış fallback'e düşmesin)
+                en_son = filtrel[-1]
+                return (f"Evet hatırlıyorum — konuşmamızdan: {en_son[:150]}")
+        # Vektör araması: (filtre boşsa) tüm özetlerden EN ALAKALI
+        eslesme = self.vektor.en_yakin(soru, ozetler, esik=0.3, limit=1)
+        if eslesme:
+            en_son = eslesme[0][1]  # (skor, metin)
+        else:
+            en_son = ozetler[-1]  # fallback: en son özet
+        return (f"Evet hatırlıyorum — konuşmamızdan: {en_son[:150]}")
 
     def stil_ogren(self, metin: str) -> None:
         """A: kullanıcının konuşma stilinden kelime çiftleri öğren (markov)."""
@@ -4756,7 +4778,7 @@ class ChatEngine:
         baglam_metni = self.baglam.ozet()
 
         # ── 3+4. HYPOTHESIS + REASONING: kognitif döngü ──
-        dusunce = self.akil.dusun(mesaj)
+        dusunce = self.akil.dusun(mesaj, baglam=self.baglam.son(5))
 
         # ── 5. CRITIC: cevap güvenilir mi? (gate zaten kernel'de, burada kontrol)
         # ── 6. RESPONSE PLANNER: kanala göre cevap stratejisi ──
@@ -4961,8 +4983,9 @@ class ChatEngine:
         return cevap
 
     def dusun(self, soru: str) -> dict:
-        """Düşünme adımlarını açıkça göster (transparan akıl)."""
-        return self.akil.dusun(soru)
+        """Düşünme adımlarını açıkça göster (transparan akıl).
+        Bağlam son 5 mesajla verilir — eksik özne durumunda kavram devralır."""
+        return self.akil.dusun(soru, baglam=self.baglam.son(5))
 
     def durum(self) -> dict:
         return {
@@ -5004,8 +5027,9 @@ class ReasoningEngine:
         self.dusunce_log: List[dict] = []
         self.cikarim_sayisi = 0
 
-    def dusun(self, soru: str) -> dict:
-        """Soru üzerinde 5 adımlı kognitif döngü çalıştır."""
+    def dusun(self, soru: str, baglam: list = None) -> dict:
+        """Soru üzerinde 5 adımlı kognitif döngü çalıştır.
+        baglam: son konuşma mesajları (eksik özne durumunda kavram çıkarmak için)."""
         adimlar = []
         norm = self.kernel.axioms._normalize_tr
         q = norm(soru)
@@ -5031,6 +5055,19 @@ class ReasoningEngine:
                 "ne", "bir", "mi", "mı", "mu", "mü", "kaç", "hangi", "ne zaman",
                 "niye", "neymiş", "olur", "edebilir", "görebilir", "mıdır", "midir"}
         kavramlar = [w for w in q.split() if len(w) > 2 and w not in stop][:3]
+        # BAĞLAM DESTEĞİ: soruda kavram yoksa son konuşmalardan kavram devral
+        # ("peki bu nerede kullanılır?" → önceki mesajın kavramı)
+        if not kavramlar and baglam:
+            for h in reversed(baglam):
+                if h.get("rol") == "user":
+                    kelimeler = [w for w in norm(str(h.get("mesaj", ""))).split()
+                                 if len(w) > 2 and w not in stop and
+                                 w not in ("peki", "sonra", "ayrıca", "evet", "hayır")]
+                    if kelimeler:
+                        kavramlar = kelimeler[:3]
+                        adimlar.append({"tur": "olgu",
+                                        "icerik": f"Bağlamdan kavram: {kelimeler[0]}"})
+                        break
         plan = []
         if kavramlar:
             plan.append({"kaynak": "bilgi_tabani", "veri": list(kavramlar)})
