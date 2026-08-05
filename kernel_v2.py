@@ -4541,8 +4541,13 @@ class ConversationMemory:
 
     def gecmis_sorgusu(self, soru: str) -> Optional[dict]:
         n = norm_tr(soru)
-        # "ne konuşmuştuk/geçen" KALICI hafıza işidir — burada sadece anlık bağlam
-        if not any(k in n for k in ("ne demi", "az once", "ne soyled", "ne yaptik")):
+        # "ne konuşmuştuk/geçen" KALICI hafıza işidir — burada sadece anlık bağlam.
+        # "az önce" tek başına yetmez: "Az önce kimya konuşmuştuk, X nedir?" YENİ SORU'dur.
+        soru_kalibi = any(k in n for k in ("ne demi", "ne soyled", "ne yaptik"))
+        az_once = "az once" in n
+        if not (soru_kalibi or (az_once and not any(k in n for k in
+                                                    ("nedir", "neden", "nasil", "nerede",
+                                                     "ne zaman", "kimdir", "ne demek")))):
             return None
         if not self.history:
             return {"cevap": "Henüz konuşma geçmişi yok — daha önce hiç konuşmadık."}
@@ -4811,10 +4816,15 @@ class ChatEngine:
         Bağlamdaki son user mesajından ana kavramı çıkarır."""
         n = norm_tr(mesaj)
         # Zamir + soru kalıbı mı? ("bu nerede", "o nedir", "peki o", "şu nasıl")
+        # "o kulüp hangi ligde" gibi "o + isim" yapıları da zamirdir.
+        # DİKKAT: "Bunu anladım" zamir SORUSU değil — sadece soru kalıpları tetiklesin.
         zamir_kalip = any(k in n for k in ("bu nerede", "bu ne", "bu nasıl", "o nerede",
                                            "o ne", "o nasıl", "şu ne", "şu nerede",
                                            "bu kim", "o kim", "peki bu", "peki o",
-                                           "bunun", "onun", "bunu", "onu"))
+                                           "bunun", "onun", "bunu ne", "onu ne",
+                                           "bunu nasil", "onu nasil", "bunu nerede",
+                                           "onu nerede", "bunu kim", "onu kim")) or \
+            bool(re.match(r'^(peki\s+)?(bu|şu|o)\s+\w+', n))
         if not zamir_kalip:
             return None
         # Bağlamdaki son kavramı bul (kullanıcı mesajındaki ana kelime)
@@ -4825,7 +4835,10 @@ class ChatEngine:
                 kelimeler = [w for w in norm_tr(h["mesaj"]).split()
                              if len(w) > 3 and w not in
                              ("nedir", "hakkında", "ne", "biliyorsun", "söyle",
-                              "anlat", "neden", "nasıl", "nerede", "var", "bir")]
+                              "anlat", "neden", "nasıl", "nerede", "var", "bir",
+                              "anladim", "simdi", "baska", "konuya", "gecelim",
+                              "kurulusu", "merhaba", "sormak", "istiyorum", "tam",
+                              "olarak", "ney", "ilgilenir")]
                 if kelimeler:
                     # "x nedir" → x; "x hakkında" → x; iki parçalıysa ilk kavram
                     kavram = kelimeler[-1] if len(kelimeler) == 1 else kelimeler[0]
@@ -4907,9 +4920,10 @@ class ChatEngine:
             return ham
 
         # Selamlaşma → sıcak karşılama (bilinmeyen kontrolünden ÖNCE)
+        # DİKKAT: "?" içeren cümle SORU'dur — "Merhaba, kimya neyle ilgilenir?" selam DEĞİL
         n = norm_tr(mesaj)
-        if any(k in n for k in ("merhaba", "selam", "naber", "hey",
-                                "gunaydin", "iyi aksamlar")):
+        if "?" not in n and any(k in n for k in ("merhaba", "selam", "naber", "hey",
+                                                 "gunaydin", "iyi aksamlar")):
             if "Henüz konuşma yok" not in baglam and "Sen:" in baglam:
                 return ("Merhaba! 👋 Önceki konuşmamızdan devam edebiliriz — "
                         "ne konuşmak istersin?")
