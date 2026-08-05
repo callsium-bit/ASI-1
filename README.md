@@ -126,7 +126,7 @@ asi-prototype/
 
 ## 🎯 Neden Farklı?
 
-- **LLM'lerin aksine**: "Mavi düşer mi?" sorusuna ezberden değil, **akıl yürüterek** cevap verir
+- **LLM'lerin aksine**: "Mavi düşer mi?(Yağmur mavi renkte mi düşer)" sorusuna ezberden değil, **akıl yürüterek** cevap verir
 - **Açıklanabilir**: Hangi aksiyom zincirinden geçtiğini adım adım gösterir
 - **Sıfır halüsinasyon**: Sembolik mantık, olasılıksal değil
 - **Çelişki korumalı**: Yanlış bilgi ana hafızaya sızmaz, izole edilir
