@@ -4,7 +4,7 @@ ASI Prototip - Tek Tıkla Başlatıcı
 Kullanım: python run.py [mod]
 
 Modlar:
-  test       → Tüm testleri çalıştır (18 test)
+  test       → Tüm testleri çalıştır (22 test)
   ask        → İnteraktif soru-cevap modu
   gaps       → Hafızadaki boşlukları listele
   distill    → LLM ile kavram damıtma (yerel LLM gerekir)
@@ -53,7 +53,7 @@ def main():
     print_banner()
 
     if mode == "test":
-        print("🧪 18 test çalıştırılıyor...\n")
+        print("🧪 22 test çalıştırılıyor...\n")
         run([KERNEL, "--test"])
 
     elif mode == "ask":
@@ -95,7 +95,7 @@ def main():
 KULLANIM: python run.py [mod]
 
 MODLAR:
-  test        → 18 testi çalıştır
+  test        → 22 testi çalıştır
   ask         → İnteraktif soru-cevap (Mavi düşer mi?)
   gaps        → Hafıza boşluklarını listele
   distill     → LLM ile kavram damıt (yerel LLM gerekir)

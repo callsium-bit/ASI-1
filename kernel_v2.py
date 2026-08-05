@@ -220,6 +220,7 @@ class AxiomEngine:
         self._load_defaults()
 
     _normalize_cache: Dict[str, str] = {}
+    _normalize_lock = threading.Lock()  # GUI(QThread)+web ingest race koruması
 
     @staticmethod
     def _normalize_tr(text: str) -> str:
@@ -234,7 +235,8 @@ class AxiomEngine:
         tr_map = str.maketrans("ğĞşŞıİüÜöÖçÇ", "gGsSiIuUoOcC")
         sonuc = text.translate(tr_map).lower()
         if len(AxiomEngine._normalize_cache) < 200000:
-            AxiomEngine._normalize_cache[text] = sonuc
+            with AxiomEngine._normalize_lock:  # thread-safe cache yazımı
+                AxiomEngine._normalize_cache[text] = sonuc
         return sonuc
 
     def _load_defaults(self):
@@ -1313,6 +1315,7 @@ class ASIKernel:
 
         # Aşama 10: Sohbet katmanı (bağlam + görev + vektör)
         self.chat = None  # geç başlatma — ChatEngine modül sonunda tanımlı
+        # (aslında hiçbir yerde atanmıyor; gui/run chat'i kendi kuruyor — LEGACY)
 
         # Kalıcı hafıza: varsa yükle, yoksa tohum veri ile başla
         loaded = False
@@ -1827,7 +1830,7 @@ class ASIKernel:
         return None
 
     def distill_concept(self, concept: str, context: str = "",
-                        endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                        endpoint: str = "http://localhost:PORT/v1/chat/completions",  # LEGACY: LLM kapalı
                         model: str = "local-model",
                         dry_run: bool = False) -> dict:
         """
@@ -1843,7 +1846,7 @@ class ASIKernel:
         }
 
     def auto_explore(self, max_concepts: int = 10,
-                     endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                     endpoint: str = "http://localhost:PORT/v1/chat/completions",  # LEGACY: LLM kapalı
                      model: str = "local-model",
                      dry_run: bool = False) -> dict:
         """
@@ -1880,14 +1883,14 @@ class ASIKernel:
 
     # ── Web Knowledge Ingestion ──────────────────────────────────
 
-    def get_web_ingester(self, endpoint: str = "http://localhost:PORT/v1/chat/completions",
+    def get_web_ingester(self, endpoint: str = "http://localhost:PORT/v1/chat/completions",  # LEGACY: LLM kapalı
                          model: str = "local-model",
                          language: str = "tr") -> 'WebKnowledgeIngester':
         """WebKnowledgeIngester instance'ı oluştur"""
         return WebKnowledgeIngester(self, endpoint=endpoint, model=model, language=language)
 
     def ingest_from_web(self, concept: str,
-                        endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                        endpoint: str = "http://localhost:PORT/v1/chat/completions",  # LEGACY: LLM kapalı
                         model: str = "local-model",
                         strategy: str = "auto") -> dict:
         """
@@ -1899,7 +1902,7 @@ class ASIKernel:
         return ingester.ingest_concept(concept, strategy=strategy)
 
     def continuous_web_ingestion(self, max_iterations: int = 0,
-                                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                                 endpoint: str = "http://localhost:PORT/v1/chat/completions",  # LEGACY: LLM kapalı
                                  model: str = "local-model",
                                  strategy: str = "auto",
                                  delay: float = 2.0) -> dict:
@@ -2046,11 +2049,13 @@ class WebKnowledgeIngester:
         try:
             import json as _json
             import random as _random
-            desktop = os.path.join(os.path.expanduser("~"), "Desktop")
+            # Ortam değişkeni deseni: ASI_VERI_DIR → masaüstü (run.py'deki ASI_PYTHON gibi)
+            veri_dizini = os.environ.get("ASI_VERI_DIR",
+                                         os.path.join(os.path.expanduser("~"), "Desktop"))
             candidates = []
             for ds_path in [
-                os.path.join(desktop, "projelerim", "data", "archive", "synthetic_data.jsonl"),
-                os.path.join(desktop, "5n1k_temiz_59k.jsonl"),
+                os.path.join(veri_dizini, "projelerim", "data", "archive", "synthetic_data.jsonl"),
+                os.path.join(veri_dizini, "5n1k_temiz_59k.jsonl"),
             ]:
                 if os.path.exists(ds_path):
                     # Rastgele başlangıç: her çağrıda farklı konular
@@ -2143,7 +2148,7 @@ class WebKnowledgeIngester:
     )
 
     def __init__(self, kernel: 'ASIKernel',
-                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                 endpoint: str = "http://localhost:PORT/v1/chat/completions",  # LEGACY: LLM kapalı
                  model: str = "local-model",
                  language: str = "tr",
                  timeout: int = 120,
@@ -2314,33 +2319,9 @@ class WebKnowledgeIngester:
 
     def _call_llm_raw(self, system_prompt: str, user_prompt: str,
                       temperature: float = 0.15, max_tokens: int = 2000) -> Optional[str]:
-        """LLM çağrısı KALDIRILDI — her zaman None döner (saf sembolik)."""
-        if True:
-            return None  # Yerel LLM kapalı — saf sembolik mod
-        payload = json.dumps({
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "temperature": temperature, "max_tokens": max_tokens
-        }).encode('utf-8')
-        try:
-            req = urllib.request.Request(
-                self.endpoint, data=payload,
-                headers={"Content-Type": "application/json"}
-            )
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                data = json.loads(resp.read())
-                msg = data["choices"][0]["message"]
-                content = msg.get("content", "").strip()
-                # Reasoning modelleri için: content boşsa reasoning_content'i kullan
-                if not content:
-                    content = msg.get("reasoning_content", "").strip()
-                return content if content else None
-        except Exception as e:
-            print(f"   ⚠️ LLM çağrı hatası: {e}")
-            return None
+        """LLM çağrısı KALDIRILDI — her zaman None döner (saf sembolik).
+        # LEGACY: eski endpoint çağrı kodu silindi (payload/urlopen bloğu)."""
+        return None  # Yerel LLM kapalı — saf sembolik mod
 
     def extract_relations_from_text(self, concept: str, text: str,
                                      use_llm: bool = True) -> dict:
@@ -2925,7 +2906,7 @@ class UnresolvedQueue:
     """
 
     def __init__(self, kernel: 'ASIKernel', batch_size: int = 5,
-                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                 endpoint: str = "http://localhost:PORT/v1/chat/completions",  # LEGACY: LLM kapalı
                  model: str = "",
                  timeout: int = 120):
         self.kernel = kernel
@@ -3106,7 +3087,7 @@ class StreamingIngestionPipeline:
     """
 
     def __init__(self, kernel: 'ASIKernel',
-                 endpoint: str = "http://localhost:PORT/v1/chat/completions",
+                 endpoint: str = "http://localhost:PORT/v1/chat/completions",  # LEGACY: LLM kapalı
                  model: str = ""):
         self.kernel = kernel
         self.fast_path = FastPathValidator(kernel)
@@ -3386,16 +3367,25 @@ class AttentionRouter:
     def __init__(self, hook_engine: 'HookEngine'):
         self.hooks = hook_engine
         self.stats = {"total_focuses": 0, "total_masked": 0, "total_active": 0}
+        self._focus_cache: Dict[Tuple[str, int], Tuple[frozenset, dict]] = {}
+        # Basit LRU: max 256 giriş (son 256 farklı (kavram, derinlik) sorgusu)
+        self._focus_lru: List[Tuple[str, int]] = []
 
     def focus(self, concept: str, depth: int = 2) -> Tuple[Set[str], dict]:
         """
         Bir kavrama odaklan: concept'ten başlayarak depth adım
         genişliğindeki komşu düğümleri aktifleştir, gerisini maskele.
+        HIZLANDIRMA: (concept, depth) LRU cache — 185K düğümde BFS tekrarı önlenir.
 
         Returns: (active_node_ids, stats)
         """
         norm = AxiomEngine._normalize_tr
         cn = norm(concept)
+        anahtar = (cn, depth)
+        # Cache'ten dön (düğüm eklenmedikçe sonuç değişmez — silinme nadir)
+        if anahtar in self._focus_cache:
+            aktif, istatistik = self._focus_cache[anahtar]
+            return set(aktif), dict(istatistik)
 
         # Başlangıç düğümlerini bul
         start_nodes = self.hooks.get_hook_nodes(cn)
@@ -3440,6 +3430,13 @@ class AttentionRouter:
             "depth": depth,
             "ratio": f"{len(active_ids)}/{total_nodes}"
         }
+
+        # Cache'e yaz (LRU: max 256 giriş)
+        self._focus_cache[anahtar] = (frozenset(active_ids), stats)
+        self._focus_lru.append(anahtar)
+        if len(self._focus_lru) > 256:
+            eski = self._focus_lru.pop(0)
+            self._focus_cache.pop(eski, None)
 
         return (active_ids, stats)
 
@@ -5166,12 +5163,7 @@ if __name__ == "__main__":
         kernel = ASIKernel()
         result = kernel.distill_concept(concept, endpoint=endpoint, model=model)
         print(f"\n📊 Sonuç: +{result['accepted']} kabul, -{result['rejected']} ret")
-        if result["nodes_created"]:
-            print(f"   ✅ Oluşan düğümler: {result['nodes_created']}")
-        if result["errors"]:
-            print(f"   ⚠️ Hatalar: {result['errors'][:3]}")
-        if result["raw_llm_output"]:
-            print(f"\n📝 Ham LLM çıktısı (ilk 300 karakter):\n{result['raw_llm_output'][:300]}")
+        print(f"   Not: {result.get('note', '')}")
     elif len(sys.argv) > 1 and sys.argv[1] == "--auto-explore":
         max_concepts = int(sys.argv[2]) if len(sys.argv) > 2 else 5
         endpoint = sys.argv[3] if len(sys.argv) > 3 else "http://localhost:PORT/v1/chat/completions"
@@ -5180,11 +5172,10 @@ if __name__ == "__main__":
         kernel = ASIKernel()
         summary = kernel.auto_explore(max_concepts=max_concepts, endpoint=endpoint, model=model)
         print(f"\n📊 Keşif Özeti:")
-        print(f"   Turlar: {summary['rounds']}")
-        print(f"   Keşfedilen: {len(summary['concepts_explored'])} kavram")
-        print(f"   Kabul: {summary['total_accepted']} | Ret: {summary['total_rejected']}")
-        print(f"   Düğümler: {summary['total_nodes']} | İzole: {summary['total_isolated']}")
-        print(f"   Kalan boşluk: {summary['remaining_gaps']}")
+        print(f"   Not: {summary.get('note', '')}")
+        print(f"   Boşluk: {summary.get('gap_count', 0)} kavram")
+        for g in summary.get("gaps", [])[:5]:
+            print(f"   [{g.get('type', '?')}] {g.get('concept', '?')}")
     elif len(sys.argv) > 1 and sys.argv[1] == "--gaps":
         kernel = ASIKernel()
         gaps = kernel._sembolik_boşluklar(limit=20)

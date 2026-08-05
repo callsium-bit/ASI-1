@@ -1,0 +1,3 @@
+# ASI-1 bağımlılıkları — çekirdek sıfır bağımlılık (saf Python stdlib)
+# Yalnızca GUI (gui.py / run.py gui) için PySide6 gerekir.
+PySide6>=6.5

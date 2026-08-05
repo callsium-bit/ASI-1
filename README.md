@@ -41,7 +41,7 @@ Sıfır bağımlılıkla çalışan, aksiyom tabanlı, kendi kendine web'den ö�
 # Tek komutla başlat
 python run.py
 
-# Testler (18 test, ~5 saniye)
+# Testler (22 test, ~5 saniye)
 python run.py test
 
 # İnteraktif soru-cevap
@@ -102,10 +102,14 @@ PySide6 ile karanlık tema, canlı durum takibi, boşluk listesi, damıtma panel
 
 ```
 asi-prototype/
-├── kernel.py          # v1: Aşama 1-2 (1114 satır)
-├── kernel_v2.py       # v2: Tüm aşamalar (~2600 satır) ★ ANA MOTOR
-├── gui.py             # PySide6 kontrol paneli
-├── run.py             # Tek tıkla başlatıcı
+├── kernel_v2.py           # v2: Tüm aşamalar (sembolik ana motor) ★
+├── dataset_ingester.py    # Veri seti işleme (5N1K, wiki_tr)
+├── autopilot.py           # Oto-pilot (LLM'siz)
+├── gece_operasyonu.py     # Gece oto-pilotu (cron: her 30dk)
+├── test_asi.py            # Test suite (40 test)
+├── gui.py                 # PySide6 kontrol paneli
+├── run.py                 # Tek tıkla başlatıcı
+├── LICENSE                # Apache 2.0
 └── README.md
 ```
 
