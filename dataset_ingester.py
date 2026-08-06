@@ -219,6 +219,11 @@ class DatasetIngester:
                             deger = five.get(alan, "").strip()
                             if deger and 3 < len(deger) <= 80:
                                 self._process_relation(subject_hint, rel, deger)
+                        # B3.3: ne_zaman alanı → düğümün zamanı (şema hep "her_zaman"dı)
+                        zaman = five.get("nezaman", "").strip()
+                        if zaman and len(zaman) <= 60:
+                            zaman_kisa = re.split(r'[,;]', zaman)[0][:60]
+                            self._process_zaman(subject_hint, zaman_kisa)
                 elif "messages" in record:
                     # Chat formatı: son assistant cevabı
                     for msg in record["messages"]:
@@ -255,6 +260,20 @@ class DatasetIngester:
         self.stats["elapsed_sec"] = round(elapsed, 2)
         self.stats["rate_per_sec"] = round(self.stats["lines_read"] / max(elapsed, 0.01), 1)
         return self.stats
+
+    def _process_zaman(self, subject: str, zaman: str):
+        """B3.3: düğümün ne_zaman alanını doldur + zaman hook'u ekle.
+        Böylece 'X ne zaman ...?' sorguları zaman bilgisine ulaşabilir."""
+        norm = self.kernel.axioms._normalize_tr
+        nodes = self.kernel.hooks.get_hook_nodes(norm(subject))
+        if not nodes:
+            return
+        node = nodes[0]
+        if node.isolated:
+            return
+        node.ne_zaman = zaman
+        self.kernel.hooks._add_hook(norm(zaman), node.id)
+        self.stats["relations"] = self.stats.get("relations", 0) + 1
 
     def _process_relation(self, subject: str, rel_type: str, target: str,
                           prop: str = ""):

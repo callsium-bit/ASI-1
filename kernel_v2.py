@@ -13,6 +13,11 @@ from typing import Any, Optional, List, Dict, Set, Tuple, Callable
 from enum import Enum
 from datetime import datetime
 import json
+# Faz 3a: orjson (10x hız) — kuruluysa kullan, değilse json fallback
+try:
+    import orjson as _orjson
+except ImportError:
+    _orjson = None
 import random
 import math
 import re
@@ -1197,8 +1202,14 @@ class KnowledgeStore:
         tmp_path = path + ".tmp"
         bak_path = path + ".bak"
         try:
-            with open(tmp_path, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
+            if _orjson:
+                # orjson: ~10x hızlı, indent=2 okunabilirlik için
+                with open(tmp_path, 'wb') as f:
+                    f.write(_orjson.dumps(data, option=_orjson.OPT_INDENT_2 |
+                                          _orjson.OPT_NON_STR_KEYS))
+            else:
+                with open(tmp_path, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, ensure_ascii=False, indent=2)
             # Mevcut ana dosyayı .bak'a taşı (yoksa sorun değil)
             if os.path.exists(path):
                 try:
@@ -1230,9 +1241,13 @@ class KnowledgeStore:
             return {"loaded": 0, "error": "Dosya bulunamadı"}
 
         try:
-            with open(path, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+            with open(path, 'rb') as f:
+                if _orjson:
+                    data = _orjson.loads(f.read())
+                else:
+                    import io as _io
+                    data = json.load(_io.TextIOWrapper(f, encoding='utf-8'))
+        except (json.JSONDecodeError, IOError, ValueError) as e:
             return {"loaded": 0, "error": str(e)}
 
         loaded = 0
@@ -3836,9 +3851,12 @@ class RelationEngine:
 
     # ── Yardımcılar ─────────────────────────────────────────────
     def _relation_exists(self, subject: str, rel_type: str, target: str) -> bool:
-        norm = norm_tr
-        for node in self.kernel.hooks.nodes.values():
-            if node.isolated or norm(node.ne) != norm(subject):
+        # Faz 3b: O(1) — ne-index'ten aday düğümleri bul (tüm grafiği tarama)
+        norm = AxiomEngine._normalize_tr
+        node_ids = self.kernel.hooks._ne_index.get(norm(subject), [])
+        for nid in node_ids:
+            node = self.kernel.hooks.nodes.get(nid)
+            if node is None or node.isolated:
                 continue
             for k, v in node.properties.items():
                 if k == rel_type and norm(str(v)) == norm(target):
@@ -4123,6 +4141,9 @@ class ToolRegistry:
             iface_clean = ifade.replace("^", "**")
             if re.fullmatch(r'[\d\s+\-*/().%**]+', iface_clean):
                 result = eval(iface_clean, {"__builtins__": {}}, {})
+                # Faz 3c: eval sonucu güvenli tipte mi? (sadece sayı dönebilir)
+                if isinstance(result, bool) or not isinstance(result, (int, float)):
+                    return {"error": "Güvenlik: yalnızca sayısal sonuçlara izin verilir"}
                 return {"sonuc": result, "ifade": ifade}
             return {"error": "Desteklenmeyen işlem"}
         except Exception as e:
@@ -4595,7 +4616,7 @@ class ConversationMemory:
     """Sohbet bağlamı: son N mesajı tutar, geçmişe dönük soruları cevaplar.
     B: UZUN SÜRELİ HAFIZA — sohbetler knowledge_store'a düğüm olarak yazılır."""
 
-    def __init__(self, max_turns: int = 30):
+    def __init__(self, max_turns: int = 100):
         self.history: List[dict] = []
         self.max_turns = max_turns
         self.vektor = VectorSpace()
