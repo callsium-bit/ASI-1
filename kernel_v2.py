@@ -4755,6 +4755,8 @@ class ChatEngine:
             os.path.dirname(os.path.abspath(__file__)), "sohbet_kaydi.jsonl")
         # B1.1: kalıcı kayıt sıklığı — her 10 turda bir (her turda değil)
         self._son_kayit_turu = 0
+        # Madde 13: AKTİF KONU TAKİBİ — son sorunun kavramı sonraki turlara taşınır
+        self._aktif_konu = None
 
     def _kaydet(self, mesaj: str, cevap: str, kanal: str, adimlar: list = None) -> None:
         """Her soru+cevap+düşünme adımlarını sohbet_kaydi.jsonl'e yaz."""
@@ -4826,7 +4828,36 @@ class ChatEngine:
         baglam_metni = self.baglam.ozet()
 
         # ── 3+4. HYPOTHESIS + REASONING: kognitif döngü ──
-        dusunce = self.akil.dusun(mesaj, baglam=self.baglam.son(5))
+        # Madde 13: AKTİF KONU — soruda HİÇ kavram yoksa son konuyu devret
+        # ("Peki ya o?" gibi zamirli devam sorularında mantık zinciri kopmasın)
+        mesaj_ic = mesaj
+        if self._aktif_konu:
+            stop_k = {"nedir", "kimdir", "nerede", "ne", "nasil", "neden", "peki", "ya",
+                      "yani", "bu", "su", "o", "mi", "mı", "mu", "mü", "bir"}
+            n_m = norm_tr(mesaj)
+            kelimeler = [w.strip('?.,!;:') for w in n_m.split()
+                         if len(w.strip('?.,!;:')) > 3 and w.strip('?.,!;:') not in stop_k]
+            if not kelimeler:
+                # Temiz soru kur: "Peki ya o?" → "kimya nedir?" (ask temiz kalıp ister)
+                soru_ek = "nedir?"
+                if "nerede" in n_m:
+                    soru_ek = "nerede?"
+                elif "kim" in n_m:
+                    soru_ek = "kimdir?"
+                elif "neden" in n_m or "nicin" in n_m:
+                    soru_ek = "neden?"
+                elif "nasil" in n_m:
+                    soru_ek = "nasildir?"
+                mesaj_ic = f"{self._aktif_konu} {soru_ek}"
+        dusunce = self.akil.dusun(mesaj_ic, baglam=self.baglam.son(5))
+        # Aktif konuyu güncelle: bilgi tabanı cevabındaki kavram
+        if dusunce["kanal"] == "bilgi_tabani":
+            for adim in dusunce.get("adimlar", []):
+                if adim.get("tur") == "ihtiyac" and adim.get("icerik"):
+                    ilk = adim["icerik"][0]["kavram"] if adim["icerik"] else None
+                    if ilk:
+                        self._aktif_konu = ilk
+                    break
 
         # ── 5. CRITIC: cevap güvenilir mi? (gate zaten kernel'de, burada kontrol)
         # ── 6. RESPONSE PLANNER: kanala göre cevap stratejisi ──
@@ -4871,12 +4902,16 @@ class ChatEngine:
         # Zamir + soru kalıbı mı? ("bu nerede", "o nedir", "peki o", "şu nasıl")
         # "o kulüp hangi ligde" gibi "o + isim" yapıları da zamirdir.
         # DİKKAT: "Bunu anladım" zamir SORUSU değil — sadece soru kalıpları tetiklesin.
+        # Madde 11: onlar/bunlar/kendisi/orasi da zamir.
         zamir_kalip = any(k in n for k in ("bu nerede", "bu ne", "bu nasıl", "o nerede",
                                            "o ne", "o nasıl", "şu ne", "şu nerede",
                                            "bu kim", "o kim", "peki bu", "peki o",
                                            "bunun", "onun", "bunu ne", "onu ne",
                                            "bunu nasil", "onu nasil", "bunu nerede",
-                                           "onu nerede", "bunu kim", "onu kim")) or \
+                                           "onu nerede", "bunu kim", "onu kim",
+                                           "onlar ne", "onlar nerede", "onlar kim",
+                                           "bunlar ne", "bunlar nerede", "kendisi ne",
+                                           "orası nerede", "orasi ne", "ikisi de")) or \
             bool(re.match(r'^(peki\s+)?(bu|şu|o)\s+\w+', n))
         if not zamir_kalip:
             return None
@@ -4899,7 +4934,7 @@ class ChatEngine:
         if not kavram:
             return None
         # Zamiri kavramla değiştir ve yeniden sor
-        yeni_soru = re.sub(r'\b(bu|şu|o|bunun|onun|bunu|onu)\b', kavram, mesaj, flags=re.IGNORECASE)
+        yeni_soru = re.sub(r'\b(bu|şu|o|bunun|onun|bunu|onu|onlar|bunlar|kendisi|orası|orasi)\b', kavram, mesaj, flags=re.IGNORECASE)
         # Bağlaçları at ("Peki X nerede kullanılır" → "X nerede kullanılır")
         yeni_soru = re.sub(r'^(peki|ve|ayrıca|o zaman|sonra|ama)\s*[,]?\s*', '', yeni_soru.strip(), flags=re.IGNORECASE)
         r = self.kernel.ask(yeni_soru)
@@ -4964,6 +4999,30 @@ class ChatEngine:
             return "\n".join(cevaplar)
         return None
 
+    def _son_cevap(self) -> Optional[str]:
+        """Bağlamdaki son ASI cevabını döndür (yeniden açıklama için)."""
+        for h in reversed(self.baglam.history):
+            if h["rol"] == "asi":
+                return str(h["mesaj"])[:200]
+        return None
+
+    def _duygu_niyet(self, mesaj: str) -> Optional[str]:
+        """Madde 14: keyword tabanlı duygu/niyet algılama (LLM'siz).
+        'anlamadım' → yeniden açıklama; 'harika' → olumlu; 'saçma' → olumsuz."""
+        n = norm_tr(mesaj)
+        # Yeniden açıklama isteği
+        if any(k in n for k in ("anlamadim", "anlamadım", "tekrar anlat",
+                                "daha acik", "ornek ver", "yani nasil")):
+            return "tekrar"
+        # Olumlu geri bildirim
+        if any(k in n for k in ("harika", "super", "guzel", "mukemmel", "cok iyi",
+                                "tesekkur", "sagol", "aferin")):
+            return "olumlu"
+        # Olumsuz (ama geri bildirim döngüsü "yanlış"ı zaten yakalar)
+        if any(k in n for k in ("sacma", "kotu", "berbat", "anlamsiz")):
+            return "olumsuz"
+        return None
+
     def _geri_bildirim(self, tur: str) -> Optional[str]:
         """Madde 19: kullanıcı geri bildirimi.
         'doğru' → son kavramın düğümünün verification_count'u artar (skor yükselir).
@@ -5013,6 +5072,23 @@ class ChatEngine:
             sonuc = self._geri_bildirim("dogru")
             if sonuc:
                 return sonuc
+
+        # Madde 14: DUYGU/NİYET — "anlamadım" → son cevabı tekrar açıkla
+        niyet = self._duygu_niyet(mesaj)
+        # Madde 13: CLARIFICATION — "yani?" / "nasıl yani?" kısa mesajları
+        if niyet != "tekrar" and len(n_bildirim) < 20 and "yani" in n_bildirim:
+            niyet = "tekrar"
+        if niyet == "tekrar":
+            son = self._son_cevap()
+            if son:
+                return (f"Tabii, daha açık anlatayım: {son} "
+                        f"(Bu, bilgi tabanımdaki en doğru özetim — "
+                        f"hangi kısmını merak ediyorsun?)")
+        if niyet == "olumlu":
+            return "Ne mutlu! 😊 Yardımcı olabildiysem harika. Başka ne öğrenmek istersin?"
+        if niyet == "olumsuz":
+            return ("Haklı olabilirsin — bu konudaki bilgim sınırlı olabilir. "
+                    "'yanlış' dersen o bilgiyi düzeltirim, ya da farklı bir soru sorabilirsin.")
 
         # Wikipedia cevabı → doğal giriş (bulunamadı hatası değilse)
         if "Wikipedia" in ham and "bulunamadı" not in ham:
