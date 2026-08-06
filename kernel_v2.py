@@ -3820,8 +3820,9 @@ class OracleStub:
 
 
 def norm_tr(s: str) -> str:
-    """Global Türkçe normalizasyon yardımcısı."""
-    return s.lower().translate(str.maketrans("ğĞşŞıİüÜöÖçÇ", "gGsSiIuUoOcC"))
+    """Global Türkçe normalizasyon yardımcısı.
+    Madde 4: AxiomEngine._normalize_tr ile birleştirildi (NFKD + cache + thread-safe)."""
+    return AxiomEngine._normalize_tr(s)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -4963,9 +4964,55 @@ class ChatEngine:
             return "\n".join(cevaplar)
         return None
 
+    def _geri_bildirim(self, tur: str) -> Optional[str]:
+        """Madde 19: kullanıcı geri bildirimi.
+        'doğru' → son kavramın düğümünün verification_count'u artar (skor yükselir).
+        'yanlış' → son kavramın en yüksek skorlu düğümü izole edilir (çelişkili sayılır).
+        Bağlamdaki son kullanıcı mesajındaki kavram hedeflenir."""
+        kavram = None
+        for h in reversed(self.baglam.history):
+            if h["rol"] == "user":
+                kelimeler = [w for w in norm_tr(h["mesaj"]).split()
+                             if len(w) > 3 and w not in
+                             ("nedir", "kimdir", "hakkinda", "ne", "biliyorsun",
+                              "neden", "nasil", "nerede", "anlat", "söyle")]
+                if kelimeler:
+                    kavram = kelimeler[-1] if len(kelimeler) == 1 else kelimeler[0]
+                break
+        if not kavram:
+            return None
+        adaylar = [n for n in self.kernel.hooks.nodes.values()
+                   if not n.isolated and norm_tr(n.ne) == kavram and "isa" in n.properties]
+        if not adaylar:
+            return None
+        if tur == "dogru":
+            for n in adaylar:
+                n.verification_count += 1
+                n.confidence = min(1.0, n.confidence + 0.02)
+            return "Teşekkürler! ✅ Bilgiyi güçlendirdim (skor artırıldı)."
+        else:  # yanlis
+            en_iyi = max(adaylar, key=lambda n: n.confidence)
+            en_iyi.isolated = True
+            en_iyi.status = "isolated"
+            en_iyi.confidence = 0.3
+            return (f"Anladım, düzeltiyorum. '{kavram}' için verdiğim bilgiyi "
+                    f"çelişkili işaretledim — bir daha öyle cevap vermeyeceğim.")
+
     def _plan_cevap(self, mesaj: str, dusunce: dict, baglam: str) -> str:
         """RESPONSE PLANNER: ham cevabı kanala göre şekillendir."""
         ham = dusunce["cevap"]
+
+        # Madde 19: GERİ BİLDİRİM DÖNGÜSÜ — "yanlış/doğru" tepkileri
+        # "yanlış" → son kavramın düğümü izole edilir; "doğru" → skor artar
+        n_bildirim = norm_tr(mesaj)
+        if ("yanlis" in n_bildirim or "yanlış" in n_bildirim) and "mi" not in n_bildirim:
+            sonuc = self._geri_bildirim("yanlis")
+            if sonuc:
+                return sonuc
+        elif "dogru" in n_bildirim and "mi" not in n_bildirim:
+            sonuc = self._geri_bildirim("dogru")
+            if sonuc:
+                return sonuc
 
         # Wikipedia cevabı → doğal giriş (bulunamadı hatası değilse)
         if "Wikipedia" in ham and "bulunamadı" not in ham:
@@ -5293,6 +5340,22 @@ if __name__ == "__main__":
             print(f"   Kabul: {summary['total_accepted']} | Ret: {summary['total_rejected']}")
         except KeyboardInterrupt:
             print("\n⏹ Kullanıcı tarafından durduruldu")
+    elif len(sys.argv) > 1 and sys.argv[1] == "--chat":
+        # Madde 22: sohbet modu (bağlam + görev + vektör + düşünme)
+        kernel = ASIKernel()
+        chat = ChatEngine(kernel)
+        print("💬 ASI-1 Sohbet Modu — çıkmak için 'çık' yaz.\n")
+        while True:
+            try:
+                soru = input("👤 > ").strip()
+            except (EOFError, KeyboardInterrupt):
+                break
+            if not soru:
+                continue
+            if soru.lower() in ("çık", "cik", "exit", "quit"):
+                break
+            r = chat.sohbet(soru)
+            print(f"🤖 {r['cevap']}")
     else:
         run_tests()
         print("\n💡 Kullanım:")
