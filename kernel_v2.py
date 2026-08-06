@@ -4520,11 +4520,19 @@ class ConversationMemory:
         self.history: List[dict] = []
         self.max_turns = max_turns
         self.vektor = VectorSpace()
+        # B1: kalıcı kayıt için biriktirme — pencereden düşenler + son kayıttan sonrası
+        self._dusen_turlar: List[dict] = []
+        self._son_kayit_index = 0
 
     def ekle(self, rol: str, mesaj: str) -> None:
         self.history.append({"rol": rol, "mesaj": mesaj, "zaman": time.time()})
         if len(self.history) > self.max_turns * 2:
+            # B1.3: sessiz silme yerine — düşen turları kalıcı kayda besle
+            dusen = self.history[:-self.max_turns * 2]
             self.history = self.history[-self.max_turns * 2:]
+            self._dusen_turlar.extend(dusen)
+            if self._son_kayit_index > len(self.history):
+                self._son_kayit_index = 0
 
     def son(self, n: int = 5) -> List[dict]:
         return self.history[-n:]
@@ -4564,31 +4572,58 @@ class ConversationMemory:
     # ── B: UZUN SÜRELİ HAFIZA ──────────────────────────────────
     def kalici_kaydet(self, kernel) -> None:
         """Sohbet özetini knowledge_store'a düğüm olarak yaz (gate'ten geçer).
-        Böylece restart'ta bile 'geçen hafta ne konuştuk' hatırlanır."""
-        if len(self.history) < 2:
+        B1.2: son kayıttan bu yana BİRİKMİŞ turları işler (kayan pencere değil).
+        B1.4: o turda geçen tanınan kavramlar hook'a yazılır (kavram-indeksli erişim)."""
+        # Birikmiş turlar: pencereden düşenler + son kayıttan sonrası
+        turlar = list(self._dusen_turlar) + self.history[self._son_kayit_index:]
+        self._dusen_turlar = []
+        self._son_kayit_index = len(self.history)
+        if len(turlar) < 2:
             return
-        # Son 4 turun özeti: pencere max_turns'e bağlı (sabit 8 yerine)
-        son_turler = self.history[-min(8, self.max_turns):]
         ozet_parcalar = []
-        for h in son_turler:
+        kavramlar = []
+        norm = kernel.axioms._normalize_tr
+        for h in turlar:
             isim = "kullanici" if h["rol"] == "user" else "asi1"
             metin = str(h["mesaj"])[:60]
             ozet_parcalar.append(f"{isim}_{metin}")
-        ozet = " | ".join(ozet_parcalar[-4:])
+            # B1.4: tanınan kavramları topla (hook'ları olan kelimeler)
+            for w in norm(h["mesaj"]).split():
+                if len(w) > 3 and kernel.hooks.get_hook_nodes(w):
+                    if w not in kavramlar:
+                        kavramlar.append(w)
+        ozet = " | ".join(ozet_parcalar[-8:])
+        props = {"icerik": ozet[:200]}
+        if kavramlar:
+            props["kavramlar"] = ",".join(kavramlar[:10])
         try:
             kernel.contradictions.gate(
-                ne="sohbet_ozeti", properties={"icerik": ozet[:200]},
+                ne="sohbet_ozeti", properties=props,
                 source=f"sohbet_hafiza|{int(time.time())}", confidence=0.9
             )
         except Exception:
             pass
 
     def hafizadan_hatirla(self, kernel, soru: str) -> Optional[str]:
-        """Kalıcı hafızadan sohbet özetlerini ara: 'geçen hafta ne konuştuk'."""
+        """Kalıcı hafızadan sohbet özetlerini ara: 'geçen hafta ne konuştuk'.
+        B1.4: önce kavram-indeksli ara (sorudaki kavramın hook'unda sohbet_ozeti var mı)."""
         n = norm_tr(soru)
         if not any(k in n for k in ("gecen", "dun", "hafta", "oncesinde", "hatirliyor",
                                     "konusmustuk", "konustuk", "ne konus", "neydi")):
             return None
+        # B1.4: sorudaki kavramların hook'larında sohbet_ozeti düğümü ara
+        soru_kavramlari = [w for w in n.split() if len(w) > 3 and w not in
+                           ("gecen", "konustugumuz", "konusmustuk", "konustuk",
+                            "hatirliyor", "hatirliyorum", "hafta", "oncesinde",
+                            "neydi", "nelerdi", "hakkinda", "son", "dun", "peki")]
+        for kavram in soru_kavramlari:
+            node_ids = kernel.hooks.get_hook_nodes(kavram)
+            for nid in node_ids:
+                node = kernel.hooks.nodes.get(nid)
+                if node and node.ne == "sohbet_ozeti" and "sohbet_hafiza" in node.source:
+                    icerik = node.properties.get("icerik", "")
+                    if icerik:
+                        return (f"Evet hatırlıyorum — konuşmamızdan: {icerik[:150]}")
         ozetler = []
         for node in kernel.hooks.nodes.values():
             if node.ne == "sohbet_ozeti" and "sohbet_hafiza" in node.source:
@@ -4717,6 +4752,8 @@ class ChatEngine:
         # SORU-CEVAP KAYDI: tüm konuşmalar dosyaya yazılır (kontrol için)
         self._kayit_yolu = os.path.join(
             os.path.dirname(os.path.abspath(__file__)), "sohbet_kaydi.jsonl")
+        # B1.1: kalıcı kayıt sıklığı — her 10 turda bir (her turda değil)
+        self._son_kayit_turu = 0
 
     def _kaydet(self, mesaj: str, cevap: str, kanal: str, adimlar: list = None) -> None:
         """Her soru+cevap+düşünme adımlarını sohbet_kaydi.jsonl'e yaz."""
@@ -4794,13 +4831,28 @@ class ChatEngine:
         # ── 6. RESPONSE PLANNER: kanala göre cevap stratejisi ──
         cevap = self._plan_cevap(mesaj, dusunce, baglam_metni)
 
+        # ── B2.3: ÖZ DEĞERLENDİRMEYİ cevaba dürüstçe yansıt ──
+        for adim in dusunce.get("adimlar", []):
+            if adim.get("tur") == "oz_degerlendirme":
+                icerik = adim.get("icerik", {})
+                eksikler = icerik.get("eksik_kavramlar", [])
+                if icerik.get("guven") == "dusuk" and eksikler:
+                    # Dürüst ek cümle: "X hakkında bilgim var ama Y'de eksiğim"
+                    if cevap and "cevaplayamıyorum" not in cevap:
+                        ek = " ".join(f"'{e}'" for e in eksikler[:3])
+                        cevap += f" ({ek} konusunda tam bilgim yok — dürüst olmak gerekirse.)"
+                break
+
         # ── 7. STYLE ADAPTER: stile uyarla + öğren ──
         cevap = self._stil_uyarla(cevap, mesaj)
 
         # Hafızaya yaz (oturum + kalıcı)
         self.baglam.ekle("user", mesaj)
         self.baglam.ekle("asi", cevap)
-        self.baglam.kalici_kaydet(self.kernel)
+        # B1.1: kalıcı kayıt her 10 turda bir (her turda değil — daha zengin özet)
+        if len(self.baglam.history) - self._son_kayit_turu >= 10:
+            self.baglam.kalici_kaydet(self.kernel)
+            self._son_kayit_turu = len(self.baglam.history)
         self.baglam.stil_ogren(mesaj)
         self._kaydet(mesaj, cevap, dusunce["kanal"], dusunce["adimlar"])
 
@@ -5099,6 +5151,11 @@ class ReasoningEngine:
         plan.append({"kaynak": "arastirma", "veri": soru})
         adimlar.append({"tur": "plan", "icerik": [p["kaynak"] for p in plan]})
 
+        # B2.1: İHTİYAÇ ÇIKARIMI — sorudaki kavramlar bilgi tabanında var mı?
+        ihtiyac_listesi = [{"kavram": k, "bulundu": bool(self.kernel.hooks.get_hook_nodes(k))}
+                           for k in kavramlar]
+        adimlar.append({"tur": "ihtiyac", "icerik": ihtiyac_listesi})
+
         # 4. OPERASYON: sırayla dene
         cevap = None
         kanal = None
@@ -5129,6 +5186,13 @@ class ReasoningEngine:
                         kanal = "cikarim"
                         adimlar.append({"tur": "operasyon", "icerik": f"Çıkarım: {c[:70]}"})
                         break
+
+        # B2.2: ÖZ DEĞERLENDİRME — güven seviyesi + eksik kavramlar
+        eksikler = [i["kavram"] for i in ihtiyac_listesi if not i["bulundu"]]
+        guven = ("yuksek" if kanal == "bilgi_tabani" and not eksikler else
+                 "orta" if kanal == "cikarim" else "dusuk")
+        adimlar.append({"tur": "oz_degerlendirme",
+                        "icerik": {"guven": guven, "eksik_kavramlar": eksikler}})
 
         # 5. GERİ BİLDİRİM
         if cevap is None:
