@@ -1546,6 +1546,14 @@ class ASIKernel:
                             "from_memory": True
                         }
 
+        # --- B3.1: İSTİSNA KONTROLÜ — "X uçar mı?" → "X yapamaz uçmak" varsa ---
+        # penguen isa kuş + kuş has_property uçabilme + penguen yapamaz uçmak → "Hayır"
+        soru_ekleri = {"mi", "mı", "mu", "mü", "midir", "mıdır", "mudur", "müdür"}
+        if any(norm(w) in soru_ekleri for w in words):
+            istisna = self._istisna_kontrol(question, words, norm)
+            if istisna:
+                return istisna
+
         # --- Genel varlık sorgusu ---
         for word in words:
             etype = self.axioms.get_entity_type(word)
@@ -1564,6 +1572,73 @@ class ASIKernel:
             "keywords_found": query_result["keywords_found"],
             "suggestion": "Yeni bir aksiyom veya bilgi ekleyin."
         }
+
+    def _istisna_kontrol(self, question: str, words: Set[str], norm) -> Optional[dict]:
+        """B3.1: 'X uçar mı?' sorusunda X'in 'yapamaz' özelliği varsa cevapla.
+        İstisna kuralı: miras alınan özellik (kuş has_property uçabilme),
+        alt sınıfta reddedilebilir (penguen yapamaz uçmak)."""
+        # 1. Sorudan kavramı çıkar (stop kelimeleri at)
+        FIILLER = {"mi", "mı", "mu", "mü", "midir", "mıdır", "mudur", "müdür",
+                   "bir", "bu", "su", "o", "ne", "acaba", "sence",
+                   "ucar", "uçabilir", "ucabilir", "edebilir", "yapabilir",
+                   "yapar", "gider", "olur", "kalir", "durur", "gelir",
+                   "ucamaz", "yapamaz", "ucmak", "ucmaz", "yuzer", "kosar"}
+        kavram = None
+        fiil = None
+        for w in sorted(words, key=len, reverse=True):
+            if w in FIILLER or len(w) < 3:
+                continue
+            if not kavram:
+                kavram = w
+            elif fiil is None:
+                fiil = w
+                break
+        if not kavram:
+            return None
+        # 2. Fiili çıkar: "uçabilir/uçar" → kök "uç" ile eşleşme kur
+        for w in words:
+            if w in ("ucar", "uçabilir", "ucabilir", "ucmak", "ucamaz"):
+                fiil = "uçmak"
+                break
+        if fiil is None:
+            return None
+        # 3. Kavramın isa zincirindeki düğümlerin "yapamaz" özellikleri
+        def _kok_eslesir(a: str, b: str) -> bool:
+            a, b = a[:5], b[:5]
+            for i in range(3, 0, -1):
+                if a[:i] == b[:i]:
+                    return True
+            return False
+        incelenecek = [kavram] + list(self.axioms.resolve_isa_chain(kavram))
+        for ad in incelenecek:
+            for node in self.hooks.get_hook_nodes(ad):
+                if node.isolated:
+                    continue
+                for k, v in node.properties.items():
+                    if k == "yapamaz" and _kok_eslesir(norm(str(v)), norm(fiil)):
+                        return {
+                            "question": question,
+                            "answer": (f"Hayır, {node.ne} {str(v).lower()} yapamaz. "
+                                       f"Bu bir istisnadır — {node.ne}, '{str(v)}' "
+                                       f"özelliğini miras almaz."),
+                            "entity": node.ne, "istisna": str(v),
+                            "from_memory": True, "source": node.source,
+                        }
+        # 4. POZİTİF DOĞRULAMA: kavramın (veya üst sınıfının) has_property'si
+        # fiil köküyle eşleşiyorsa → "Evet, ... edebilir" (kuş has_property uçabilme)
+        for ad in incelenecek:
+            for node in self.hooks.get_hook_nodes(ad):
+                if node.isolated:
+                    continue
+                for k, v in node.properties.items():
+                    if k == "has_property" and _kok_eslesir(norm(str(v)), norm(fiil)):
+                        return {
+                            "question": question,
+                            "answer": f"Evet, {node.ne} {str(v).lower()} özelliğine sahiptir.",
+                            "entity": node.ne, "pozitif": str(v),
+                            "from_memory": True, "source": node.source,
+                        }
+        return None
 
     def _handle_color_action_question(self, question: str, color: str) -> dict:
         color_chain = self.axioms.resolve_isa_chain(color)
@@ -3485,6 +3560,9 @@ RELATION_TYPES = {
     "located_in":    {"gecisli": True,  "ters": "icerikleri",     "aciklama": "konum"},
     "invented_by":   {"gecisli": False, "ters": "icatlari",       "aciklama": "icat eden"},
     "has_property":  {"gecisli": False, "ters": "sahipleri",      "aciklama": "özellik"},
+    # B3.1: İSTİSNA — "X yapamaz Y" (miras alınan özelliği reddeder)
+    # penguen isa kuş + kuş has_property uçabilme + penguen yapamaz uçmak
+    "yapamaz":       {"gecisli": False, "ters": "yapabilir",      "aciklama": "istisna/olumsuz yetenek"},
 }
 
 # Türkçe 5N1K alanı → ilişki türü eşlemesi
